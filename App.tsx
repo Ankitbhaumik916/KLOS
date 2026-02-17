@@ -5,14 +5,13 @@ import Dashboard from './components/Dashboard';
 import DataGrid from './components/DataGrid';
 import GeminiInsight from './components/GeminiInsight';
 import AIDeepdive from './components/AIDeepdive';
-import AIManagerDashboard from './components/AIManagerDashboard';
 import Login from './components/Login';
 import Settings from './components/Settings';
 import { parseCSV } from './services/csvService';
 import { storageService } from './services/storageService';
 import { authService } from './services/authService';
 
-type Tab = 'dashboard' | 'data' | 'ai' | 'manager' | 'deepdive';
+type Tab = 'dashboard' | 'data' | 'ai' | 'deepdive';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -223,18 +222,6 @@ const App: React.FC = () => {
                   </button>
 
                   <button
-                    onClick={() => setActiveTab('manager')}
-                    className={`flex items-center gap-2 px-6 py-4 text-xs font-bold uppercase tracking-widest transition-all border-b-2 ${
-                      activeTab === 'manager' 
-                        ? 'border-amber-600 text-amber-500 bg-white/5' 
-                        : 'border-transparent text-gray-500 hover:text-[#fef3c7]'
-                    }`}
-                  >
-                    <span className="text-lg mb-0.5">🤵</span>
-                    Manager
-                  </button>
-
-                  <button
                     onClick={() => setActiveTab('deepdive')}
                     className={`flex items-center gap-2 px-6 py-4 text-xs font-bold uppercase tracking-widest transition-all border-b-2 ${
                       activeTab === 'deepdive' 
@@ -252,7 +239,6 @@ const App: React.FC = () => {
                  {activeTab === 'dashboard' && <Dashboard orders={orders} user={user} />}
                  {activeTab === 'data' && <DataGrid orders={orders} />}
                  {activeTab === 'ai' && <GeminiInsight orders={orders} userName={user.name} />}
-                 {activeTab === 'manager' && <AIManagerDashboard orders={orders} userName={user.name} />}
                  {activeTab === 'deepdive' && <AIDeepdive orders={orders} userName={user.name} />}
               </div>
            </div>

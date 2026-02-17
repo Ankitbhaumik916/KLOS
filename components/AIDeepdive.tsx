@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ZomatoOrder, DSSAnalysis, RAGKBStats } from '../types';
+import { ZomatoOrder, DSSAnalysis } from '../types';
 import { ragDssService } from '../services/ragDssService';
 
 interface AIDeepdiveProps {
@@ -11,13 +11,10 @@ const AIDeepdive: React.FC<AIDeepdiveProps> = ({ orders, userName }) => {
   const [query, setQuery] = useState('');
   const [analysis, setAnalysis] = useState<DSSAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
-  const [kbStats, setKbStats] = useState<RAGKBStats | null>(null);
   const [error, setError] = useState('');
   const [initialized, setInitialized] = useState(false);
-  const [baseUrl, setBaseUrl] = useState('http://localhost:11435'); // Use LLM proxy with CORS support
-  const [showSettings, setShowSettings] = useState(false);
 
-  // Initialize RAG knowledge base on component mount
+  // Initialize RAG knowledge base
   useEffect(() => {
     const initialize = async () => {
       if (orders.length === 0) {
@@ -29,11 +26,10 @@ const AIDeepdive: React.FC<AIDeepdiveProps> = ({ orders, userName }) => {
         setLoading(true);
         await ragDssService.buildKnowledgeBase(orders);
         setInitialized(true);
-        setKbStats(ragDssService.getStats());
         setError('');
       } catch (err) {
         console.error('Failed to initialize RAG KB:', err);
-        setError('Failed to initialize AI model. Check console for details.');
+        setError('Failed to initialize. Check console for details.');
       } finally {
         setLoading(false);
       }
@@ -42,7 +38,7 @@ const AIDeepdive: React.FC<AIDeepdiveProps> = ({ orders, userName }) => {
     initialize();
   }, [orders]);
 
-  // Handle DSS query submission
+  // Handle query submission
   const handleQuerySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim() || !initialized) return;
@@ -56,7 +52,7 @@ const AIDeepdive: React.FC<AIDeepdiveProps> = ({ orders, userName }) => {
         query,
         orders,
         userName,
-        baseUrl
+        'http://localhost:11435'
       );
       setAnalysis(result);
     } catch (err) {
@@ -67,266 +63,137 @@ const AIDeepdive: React.FC<AIDeepdiveProps> = ({ orders, userName }) => {
     }
   };
 
-  // Example queries for quick access
+  // Example queries
   const exampleQueries = [
     'What are the best-performing menu items?',
     'How can I reduce order rejection rate?',
     'What times have the highest demand?',
-    'How can I improve customer ratings?',
-    'What is my profit optimization strategy?'
+    'How can I improve customer ratings?'
   ];
-
-  const handleExampleQuery = (exampleQuery: string) => {
-    setQuery(exampleQuery);
-  };
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-xl border border-slate-700 p-6">
-        <div className="flex justify-between items-start">
-          <div>
-            <h2 className="text-3xl font-bold text-white mb-2">AI Deep Dive</h2>
-            <p className="text-slate-400 text-sm">
-              RAG-powered Decision Support System using your {orders.length} order records
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-green-400 text-xs font-bold">✓ Connected</span>
-            <button
-              onClick={() => setShowSettings(!showSettings)}
-              className="text-slate-400 hover:text-white transition-colors px-3 py-2 rounded border border-slate-600 text-xs"
-            >
-              ⚙️ Settings
-            </button>
-          </div>
-        </div>
-
-        {/* Knowledge Base Status */}
-        <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
-          <div className="bg-slate-700/50 rounded p-2 border border-slate-600">
-            <p className="text-slate-400">KB Status</p>
-            <p className="text-emerald-400 font-bold">
-              {initialized ? '✓ Ready' : loading ? 'Initializing...' : '○ Pending'}
-            </p>
-          </div>
-          <div className="bg-slate-700/50 rounded p-2 border border-slate-600">
-            <p className="text-slate-400">Embeddings</p>
-            <p className="text-blue-400 font-bold">{kbStats?.embeddingsCount || 0}</p>
-          </div>
-          <div className="bg-slate-700/50 rounded p-2 border border-slate-600">
-            <p className="text-slate-400">Mode</p>
-            <p className="text-yellow-400 font-bold">Fallback* 
-              <span className="text-[10px] block text-slate-400">Start Ollama for AI</span>
-            </p>
-          </div>
-        </div>
+      <div className="bg-gradient-to-r from-blue-900 to-blue-800 rounded-xl border border-blue-700 p-6">
+        <h2 className="text-3xl font-bold text-white mb-2">🧠 AI Deep Dive</h2>
+        <p className="text-blue-100 text-sm">RAG-powered Q&A using your {orders.length} order records</p>
       </div>
-
-      {/* Settings Panel */}
-      {showSettings && (
-        <div className="bg-gradient-to-r from-green-900 to-slate-800 rounded-xl border border-green-700 p-4">
-          <h3 className="text-sm font-bold text-green-200 mb-3">✓ LLM Configuration (Connected)</h3>
-          <div className="space-y-3">
-            <div className="bg-black/30 rounded p-3">
-              <p className="text-xs text-green-300 font-semibold mb-2">🌐 Connection Status: ACTIVE</p>
-              <div className="space-y-2 text-xs text-green-200">
-                <div className="flex justify-between">
-                  <span>LLM Proxy:</span>
-                  <code className="bg-slate-900 px-2 py-1 rounded">{baseUrl}</code>
-                </div>
-                <div className="flex justify-between">
-                  <span>Ollama Server:</span>
-                  <code className="bg-slate-900 px-2 py-1 rounded">http://localhost:11434</code>
-                </div>
-                <div className="flex justify-between">
-                  <span>Model:</span>
-                  <code className="bg-slate-900 px-2 py-1 rounded">llama3.2</code>
-                </div>
-              </div>
-            </div>
-            <p className="text-[10px] text-green-300 font-semibold">
-              ✓ Both Ollama and LLM Proxy are running
-            </p>
-            <p className="text-[10px] text-green-200">
-              If queries fail, ensure both are running in separate terminals:
-              <br/>• Terminal 1: <code className="bg-slate-900 px-1">ollama serve</code>
-              <br/>• Terminal 2: <code className="bg-slate-900 px-1">npm run start-llm-proxy</code>
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Query Input */}
       <form onSubmit={handleQuerySubmit} className="space-y-3">
-        <div className="relative">
-          <textarea
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Ask your DSS query... (e.g., 'What menu items should I focus on for revenue?')"
-            disabled={!initialized || loading}
-            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50 resize-none text-sm"
-            rows={3}
-          />
-        </div>
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Ask anything about your orders... e.g., 'What should I do to increase revenue?'"
+          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          disabled={!initialized || loading}
+        />
 
         <button
           type="submit"
           disabled={!initialized || loading || !query.trim()}
-          className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 disabled:from-slate-600 disabled:to-slate-600 text-white font-bold py-2 rounded-lg transition-all text-sm"
+          className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-bold py-3 rounded-lg transition-colors"
         >
-          {loading ? '🔄 Analyzing...' : '🚀 Analyze'}
+          {loading ? '🔍 Analyzing...' : '⚡ Analyze'}
         </button>
       </form>
 
-      {/* Example Queries */}
-      {!analysis && (
-        <div className="space-y-2">
-          <p className="text-xs text-slate-400">Quick start examples:</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {exampleQueries.map((exampleQuery, idx) => (
-              <button
-                key={idx}
-                onClick={() => handleExampleQuery(exampleQuery)}
-                disabled={!initialized}
-                className="text-left bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-600 rounded px-3 py-2 text-xs text-slate-300 hover:text-white transition-colors"
-              >
-                💡 {exampleQuery}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Error Display */}
-      {error && (
-        <div className="bg-red-900/20 border border-red-700 rounded-lg p-4">
-          <p className="text-red-300 text-sm">⚠️ {error}</p>
-        </div>
-      )}
-
-      {/* Analysis Results */}
-      {analysis && (
-        <div className="space-y-4">
-          {/* Executive Summary */}
-          <div className="bg-slate-800 rounded-lg border border-slate-700 p-4">
-            <h3 className="text-sm font-bold text-white mb-2">📊 Executive Summary</h3>
-            <p className="text-slate-300 text-sm leading-relaxed">{analysis.executiveSummary}</p>
-            <p className="text-slate-500 text-xs mt-3">Query: "{analysis.query}"</p>
-          </div>
-
-          {/* Recommendations */}
-          {analysis.recommendations.length > 0 && (
-            <div className="bg-slate-800 rounded-lg border border-slate-700 p-4">
-              <h3 className="text-sm font-bold text-white mb-3">🎯 Recommendations</h3>
-              <div className="space-y-3">
-                {analysis.recommendations.map((rec, idx) => (
-                  <div
-                    key={idx}
-                    className="bg-slate-700/50 rounded border border-slate-600 p-3"
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <p className="text-white font-semibold text-sm">{rec.category}</p>
-                      <div className="flex items-center gap-1">
-                        <div className="w-12 h-1 bg-slate-600 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-gradient-to-r from-green-500 to-emerald-500"
-                            style={{ width: `${rec.confidenceScore * 100}%` }}
-                          />
-                        </div>
-                        <span className="text-slate-400 text-xs">
-                          {(rec.confidenceScore * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                    </div>
-                    <p className="text-slate-300 text-sm mb-2">{rec.insight}</p>
-                    <ul className="space-y-1">
-                      {rec.actionItems.map((action, aidx) => (
-                        <li key={aidx} className="text-slate-400 text-xs flex gap-2">
-                          <span>→</span>
-                          <span>{action}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Similar Orders Retrieved */}
-          {analysis.similarOrders.length > 0 && (
-            <div className="bg-slate-800 rounded-lg border border-slate-700 p-4">
-              <h3 className="text-sm font-bold text-white mb-3">📋 Similar Historical Orders</h3>
-              <div className="space-y-2">
-                {analysis.similarOrders.map((order) => (
-                  <div
-                    key={order.orderId}
-                    className="bg-slate-700/50 rounded px-3 py-2 border border-slate-600 text-xs"
-                  >
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="text-white font-semibold">{order.restaurantName}</p>
-                        <p className="text-slate-400">
-                          {order.items || 'Unknown items'} | {order.city || 'N/A'}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-emerald-400 font-bold">₹{order.totalAmount}</p>
-                        <p className={`text-[10px] ${
-                          order.orderStatus === 'Completed' ? 'text-green-400' : 'text-red-400'
-                        }`}>
-                          {order.orderStatus} {order.rating ? `• ⭐${order.rating}` : ''}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* New Query Button */}
-          <button
-            onClick={() => {
-              setAnalysis(null);
-              setQuery('');
-            }}
-            className="w-full bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded-lg py-2 text-white text-sm transition-colors"
-          >
-            ← New Query
-          </button>
-        </div>
-      )}
-
-      {/* Ollama Setup Banner */}
-      <div className="bg-amber-900/30 border border-amber-700 rounded-lg p-4">
-        <div className="flex gap-3">
-          <div className="text-amber-400 text-xl">⚡</div>
-          <div>
-            <p className="text-amber-300 text-sm font-semibold mb-1">Enhanced Mode: Query-Specific Analysis</p>
-            <p className="text-amber-200/70 text-xs mb-2">
-              Currently using intelligent fallback analysis. To unlock AI-powered insights with deep reasoning:
-            </p>
-            <ol className="text-amber-200/70 text-xs space-y-1 ml-2">
-              <li><strong>1.</strong> Download Ollama: <a href="https://ollama.ai" className="underline hover:text-amber-300" target="_blank" rel="noopener">https://ollama.ai</a></li>
-              <li><strong>2.</strong> Run: <code className="bg-black/40 px-1">ollama pull llama3.2 && ollama serve</code></li>
-              <li><strong>3.</strong> Refresh this page & try your query again</li>
-            </ol>
-            <p className="text-amber-200/50 text-xs mt-2 italic">Windows: Double-click setup-ollama.bat in your project folder for auto-setup</p>
-          </div>
+      {/* Quick Examples */}
+      <div>
+        <p className="text-slate-400 text-xs uppercase tracking-wide mb-2">Quick Examples:</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {exampleQueries.map((q, i) => (
+            <button
+              key={i}
+              onClick={() => setQuery(q)}
+              className="p-2 text-left bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-xs text-slate-300 hover:text-white transition-colors"
+            >
+              {q}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Empty State */}
-      {!loading && !analysis && initialized && (
-        <div className="text-center py-12 text-slate-500">
-          <p className="text-sm mb-2">🤖 Knowledge base ready</p>
-          <p className="text-xs">
-            Ask a question about your orders to get insights (enhanced fallback mode active)
-          </p>
+      {/* Error Display */}
+      {error && (
+        <div className="p-4 bg-red-900 border border-red-700 rounded text-red-200 text-sm">
+          {error}
         </div>
       )}
+
+      {/* Results */}
+      {analysis && !loading && (
+        <div className="space-y-4">
+          {/* Summary */}
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
+            <h3 className="text-white font-bold mb-2">📊 Summary</h3>
+            <p className="text-slate-300 text-sm">{analysis.executiveSummary}</p>
+          </div>
+
+          {/* Similar Orders */}
+          {analysis.similarOrders.length > 0 && (
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
+              <h3 className="text-white font-bold mb-3">🔍 Similar Orders ({analysis.similarOrders.length})</h3>
+              <div className="space-y-2">
+                {analysis.similarOrders.map((order, i) => (
+                  <div key={i} className="text-xs bg-slate-700 rounded p-3">
+                    <div className="text-slate-300 font-medium">{order.restaurantName}</div>
+                    <div className="text-slate-400 mt-1">
+                      {order.items && <span>{order.items} • </span>}
+                      ₹{order.totalAmount}
+                      {order.rating && <span> • ⭐{order.rating}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Recommendations */}
+          {analysis.recommendations.length > 0 && (
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
+              <h3 className="text-white font-bold mb-3">💡 Recommendations</h3>
+              <div className="space-y-3">
+                {analysis.recommendations.map((rec, i) => (
+                  <div key={i} className="border-l-4 border-blue-500 pl-3">
+                    <div className="flex justify-between items-start mb-1">
+                      <h4 className="text-blue-300 font-semibold text-sm">{rec.category}</h4>
+                      <span className="text-xs text-slate-400">{(rec.confidenceScore * 100).toFixed(0)}%</span>
+                    </div>
+                    <p className="text-slate-300 text-xs mb-2">{rec.insight}</p>
+                    {rec.actionItems.length > 0 && (
+                      <ul className="text-xs text-slate-400 space-y-1">
+                        {rec.actionItems.slice(0, 3).map((action, j) => (
+                          <li key={j} className="ml-2 before:content-['→'] before:mr-2">{action}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Loading State */}
+      {loading && (
+        <div className="p-6 text-center">
+          <div className="text-blue-300 font-semibold mb-2">🔍 Analyzing...</div>
+          <div className="flex justify-center gap-1">
+            <div className="h-2 w-2 bg-blue-400 rounded-full animate-bounce"></div>
+            <div className="h-2 w-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+            <div className="h-2 w-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+          </div>
+        </div>
+      )}
+
+      {/* KB Status */}
+      <div className="text-xs text-slate-500 p-3 bg-slate-900 rounded border border-slate-800">
+        <p>✓ Knowledge base ready with {orders.length} orders</p>
+        <p className="mt-1">💡 Tip: Ask specific questions about your order data to get insights</p>
+      </div>
     </div>
   );
 };
