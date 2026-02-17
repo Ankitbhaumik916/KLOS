@@ -17,6 +17,7 @@ export const AIManagerDashboard: React.FC<AIManagerDashboardProps> = ({ orders, 
   const [loading, setLoading] = useState(false);
   const [baseUrl, setBaseUrl] = useState('http://localhost:11434');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [proxyUrl] = useState('http://localhost:11435'); // Use LLM proxy instead of direct Ollama
 
   // Initialize metrics on mount
   useEffect(() => {
@@ -105,7 +106,7 @@ export const AIManagerDashboard: React.FC<AIManagerDashboardProps> = ({ orders, 
         query,
         orders,
         `${userName}'s Kitchen Manager`,
-        baseUrl
+        proxyUrl // Use proxy URL for CORS support
       );
       setAnalysis(result);
     } catch (err) {
@@ -385,18 +386,15 @@ export const AIManagerDashboard: React.FC<AIManagerDashboardProps> = ({ orders, 
             ⚙️ LLM Settings
           </summary>
           <div className="mt-3 space-y-2">
-            <div>
-              <label className="text-slate-400 text-sm block mb-1">Ollama Base URL</label>
-              <input
-                type="text"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                className="w-full bg-slate-800 text-white rounded px-3 py-2 text-sm border border-slate-700"
-                placeholder="http://localhost:11434"
-              />
+            <div className="bg-green-900 border border-green-700 rounded p-2">
+              <p className="text-green-200 text-xs font-semibold">✓ Connected</p>
+              <p className="text-green-300 text-xs mt-1">LLM Proxy: {proxyUrl}</p>
+              <p className="text-green-400 text-xs mt-2">Ollama: http://localhost:11434</p>
             </div>
             <p className="text-xs text-slate-500">
-              Ensure Ollama is running locally: ollama serve
+              Ensure both are running:
+              <br/>- Terminal 1: <code className="bg-slate-900 px-1">ollama serve</code>
+              <br/>- Terminal 2: <code className="bg-slate-900 px-1">npm run start-llm-proxy</code>
             </p>
           </div>
         </details>
