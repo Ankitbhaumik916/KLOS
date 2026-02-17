@@ -1,0 +1,5 @@
+{
+  "name": "CloudKitchen AI Manager",
+  "description": "A real-time dashboard for Cloud Kitchens simulating a WebSocket connection to a Zomato scraper. Features live order tracking, sales visualization with Recharts, and AI-driven business insights using Gemini.",
+  "requestFramePermissions": []
+}
