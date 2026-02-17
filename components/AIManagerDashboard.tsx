@@ -283,27 +283,45 @@ export const AIManagerDashboard: React.FC<AIManagerDashboardProps> = ({ orders, 
       {/* Analysis Results */}
       {analysis && !loading && (
         <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 space-y-4">
-          <div>
-            <h3 className="text-white font-bold mb-2">📊 AI Analysis</h3>
-            <p className="text-slate-300 text-sm">{analysis.executiveSummary}</p>
+          {/* Executive Summary */}
+          <div className="bg-gradient-to-r from-slate-800 to-slate-700 rounded p-4 border border-slate-600">
+            <h3 className="text-white font-bold mb-2 flex items-center gap-2">
+              <span>📊 Analysis Summary</span>
+            </h3>
+            <p className="text-slate-200 text-sm leading-relaxed">{analysis.executiveSummary}</p>
+            <div className="mt-3 text-xs text-slate-400">
+              <span className="inline-block">Orders analyzed: {analysis.similarOrders.length}</span>
+              <span className="mx-2">•</span>
+              <span className="inline-block">Recommendations: {analysis.recommendations.length}</span>
+              <span className="mx-2">•</span>
+              <span className="inline-block">Avg confidence: {(analysis.recommendations.length > 0 ? analysis.recommendations.reduce((sum, r) => sum + r.confidenceScore, 0) / analysis.recommendations.length * 100 : 0).toFixed(0)}%</span>
+            </div>
           </div>
 
           {/* Similar Orders Context */}
           {analysis.similarOrders.length > 0 && (
-            <div className="bg-slate-800 rounded p-4">
-              <h4 className="text-slate-200 font-semibold text-sm mb-2">Similar Historical Orders (Context)</h4>
+            <div className="bg-slate-800 rounded p-4 border border-slate-700">
+              <h4 className="text-slate-200 font-semibold text-sm mb-3 flex items-center gap-2">
+                <span>🔍 Similar Historical Orders</span>
+                <span className="text-xs bg-slate-700 px-2 py-1 rounded">{analysis.similarOrders.length} orders</span>
+              </h4>
               <div className="space-y-2">
                 {analysis.similarOrders.map((order, i) => (
-                  <div key={i} className="text-xs text-slate-400 bg-slate-700 rounded p-2">
-                    <span className="text-slate-300">{order.restaurantName}</span>
-                    {' - '}
-                    <span>₹{order.totalAmount}</span>
-                    {' - '}
-                    <span className={order.orderStatus === 'Completed' ? 'text-green-400' : 'text-red-400'}>
-                      {order.orderStatus}
-                    </span>
-                    {' - '}
-                    <span>⭐ {order.rating || 'unrated'}</span>
+                  <div key={i} className="text-xs bg-slate-700 rounded p-2 flex justify-between items-center hover:bg-slate-600 transition-colors">
+                    <div className="flex-1">
+                      <div className="text-slate-300 font-medium">{order.restaurantName}</div>
+                      <div className="text-slate-400 text-xs mt-1">
+                        {order.items && <span>{order.items} • </span>}
+                        {order.city && <span>{order.city}</span>}
+                      </div>
+                    </div>
+                    <div className="text-right space-y-1">
+                      <div className="text-amber-300 font-semibold">₹{order.totalAmount}</div>
+                      <div className={`text-xs font-semibold ${order.orderStatus === 'Completed' ? 'text-green-400' : 'text-red-400'}`}>
+                        {order.orderStatus}
+                      </div>
+                      {order.rating && <div className="text-yellow-400">⭐ {order.rating}</div>}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -314,22 +332,35 @@ export const AIManagerDashboard: React.FC<AIManagerDashboardProps> = ({ orders, 
           <div className="space-y-3">
             <h4 className="text-white font-semibold">💡 Key Recommendations</h4>
             {analysis.recommendations.map((rec, i) => (
-              <div key={i} className="bg-slate-800 border-l-4 border-amber-600 rounded p-4">
-                <div className="flex justify-between items-start mb-2">
-                  <h5 className="text-amber-200 font-bold">{rec.category}</h5>
-                  <div className="text-sm text-slate-400">
-                    Confidence: {(rec.confidenceScore * 100).toFixed(0)}%
+              <div key={i} className="bg-slate-800 border-l-4 border-amber-600 rounded p-4 hover:bg-slate-750 transition-colors">
+                <div className="flex justify-between items-start mb-2 mb-3">
+                  <div className="flex items-center gap-2">
+                    <h5 className="text-amber-200 font-bold">{rec.category}</h5>
+                    <div className="flex items-center gap-1 text-xs">
+                      <div className="h-1.5 flex-1 bg-slate-700 rounded overflow-hidden">
+                        <div 
+                          className="h-full bg-gradient-to-r from-amber-500 to-orange-500 rounded"
+                          style={{ width: `${rec.confidenceScore * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-amber-300 font-semibold text-xs ml-1">
+                        {(rec.confidenceScore * 100).toFixed(0)}%
+                      </span>
+                    </div>
                   </div>
                 </div>
-                <p className="text-slate-300 text-sm mb-2">{rec.insight}</p>
+                <p className="text-slate-300 text-sm mb-3 leading-relaxed">{rec.insight}</p>
                 {rec.actionItems.length > 0 && (
-                  <ul className="text-xs text-slate-400 space-y-1">
-                    {rec.actionItems.map((action, j) => (
-                      <li key={j} className="ml-4 before:content-['→'] before:mr-2">
-                        {action}
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="space-y-2">
+                    <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Action Items:</div>
+                    <ul className="text-xs text-slate-400 space-y-1">
+                      {rec.actionItems.map((action, j) => (
+                        <li key={j} className="ml-4 flex gap-2 before:content-['✓'] before:text-green-500 before:font-bold before:mr-1">
+                          <span>{action}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </div>
             ))}

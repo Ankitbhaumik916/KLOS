@@ -292,6 +292,11 @@ Based on the above context, please provide strategic recommendations that the ki
 
     for (const endpoint of endpoints) {
       try {
+        console.log(`[RAG DSS] Attempting Llama at: ${endpoint}`);
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+        
         const response = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -300,22 +305,32 @@ Based on the above context, please provide strategic recommendations that the ki
             prompt,
             stream: false,
             temperature: 0.4,  // Slightly less random for business advice
-            top_p: 0.9
-          })
+            top_p: 0.9,
+            num_predict: 1024  // Limit response length
+          }),
+          signal: controller.signal
         });
 
-        if (!response.ok) continue;
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          console.warn(`[RAG DSS] Endpoint ${endpoint} returned ${response.status}`);
+          continue;
+        }
 
         const data = await response.json();
+        console.log(`[RAG DSS] Success from ${endpoint}`);
+        
         if (data.response) return data.response;
         if (data.message?.content) return data.message.content;
         if (data.choices?.[0]?.text) return data.choices[0].text;
       } catch (err) {
-        console.warn(`Endpoint ${endpoint} failed:`, err);
+        console.warn(`[RAG DSS] Endpoint ${endpoint} failed:`, err instanceof Error ? err.message : err);
       }
     }
 
-    throw new Error('All Llama endpoints failed');
+    console.error('[RAG DSS] All Llama endpoints failed');
+    throw new Error(`All Llama endpoints failed. Ensure Ollama is running at ${baseUrl}`);
   }
 
   /**
@@ -462,36 +477,59 @@ RECOMMENDATIONS:
   private parseRecommendations(response: string): DSSRecommendation[] {
     const recommendations: DSSRecommendation[] = [];
 
-    // Extract numbered items or bullet points
+    // Split by common patterns for clear sections
+    const sections = response.split(/(?:^|\n)(?:\*\*|#+)([^*\n]+)(?:\*\*|#+)/m);
+    
+    let currentCategory = 'General';
     const lines = response.split('\n');
-    let currentInsight = '';
-    let currentActions: string[] = [];
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.match(/^(\d+\.|[-*•])/)) {
-        if (currentInsight && currentActions.length > 0) {
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      // Detect category headers
+      if (line.match(/^\*\*.*\*\*$/)) {
+        currentCategory = line.replace(/\*\*/g, '').trim();
+        continue;
+      }
+      
+      // Detect numbered items or bullet points with confidence
+      const confidenceMatch = line.match(/(\d+)%/);
+      const confidence = confidenceMatch ? parseInt(confidenceMatch[1]) / 100 : 0.75;
+      
+      if (line.match(/^(\d+\.|[-*•>+])\s+/)) {
+        const insight = line.replace(/^(\d+\.|[-*•>+])\s+/, '').trim();
+        
+        if (insight && insight.length > 10) {
+          // Collect following action items
+          const actionItems: string[] = [];
+          for (let j = i + 1; j < lines.length; j++) {
+            const nextLine = lines[j].trim();
+            if (nextLine.match(/^(\d+\.|[-*•>+])\s+/)) break;
+            if (nextLine.length > 0 && !nextLine.match(/\*\*/)) {
+              actionItems.push(nextLine.replace(/^[-*•>+]\s+/, ''));
+            }
+          }
+          
           recommendations.push({
-            category: this.extractCategory(currentInsight),
-            insight: currentInsight,
-            actionItems: currentActions,
-            confidenceScore: Math.random() * 0.3 + 0.7 // 0.7-1.0
+            category: this.extractCategory(insight),
+            insight: insight.substring(0, 150) + (insight.length > 150 ? '...' : ''),
+            actionItems: actionItems.slice(0, 5),
+            confidenceScore: Math.min(confidence, 0.99)
           });
         }
-        currentInsight = trimmed.replace(/^(\d+\.|[-*•])\s+/, '');
-        currentActions = [];
-      } else if (trimmed && currentInsight) {
-        currentActions.push(trimmed);
       }
     }
 
-    // Add last recommendation
-    if (currentInsight && currentActions.length > 0) {
-      recommendations.push({
-        category: this.extractCategory(currentInsight),
-        insight: currentInsight,
-        actionItems: currentActions,
-        confidenceScore: Math.random() * 0.3 + 0.7
+    // Fallback: If no structured recommendations found, extract general insights
+    if (recommendations.length === 0) {
+      const sentences = response.split(/[.!?]+/).filter(s => s.trim().length > 20);
+      sentences.slice(0, 3).forEach(sentence => {
+        recommendations.push({
+          category: this.extractCategory(sentence),
+          insight: sentence.trim().substring(0, 150),
+          actionItems: ['Monitor metrics', 'Implement changes', 'Track results'],
+          confidenceScore: 0.72
+        });
       });
     }
 
@@ -499,7 +537,7 @@ RECOMMENDATIONS:
       {
         category: 'General',
         insight: response.substring(0, 100),
-        actionItems: ['Monitor metrics', 'Analyze trends', 'Update strategy'],
+        actionItems: ['Analyze data', 'Plan implementation', 'Monitor impact'],
         confidenceScore: 0.65
       }
     ];
