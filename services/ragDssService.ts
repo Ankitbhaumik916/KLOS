@@ -212,44 +212,77 @@ class RAGDSSService {
     };
 
     const similarContext = similarOrders
-      .slice(0, 3)
+      .slice(0, 5)
       .map((o, i) => 
-        `Similar Order ${i + 1}: ${o.restaurantName} - ₹${o.totalAmount} (${o.orderStatus}) Rating: ${o.rating || 'N/A'}`
+        `Similar Order ${i + 1}: ${o.restaurantName} - ₹${o.totalAmount} (${o.orderStatus}) Rating: ${o.rating || 'N/A'} Items: ${o.items || 'N/A'} City: ${o.city || 'N/A'}`
       )
       .join('\n');
 
-    return `CLOUD KITCHEN DSS ANALYSIS REQUEST
+    // Calculate additional business metrics from similar orders
+    const avgSimilarValue = similarOrders.length > 0 
+      ? similarOrders.reduce((sum, o) => sum + o.totalAmount, 0) / similarOrders.length 
+      : 0;
+    const similarCompletionRate = similarOrders.length > 0
+      ? (similarOrders.filter(o => o.orderStatus === 'Completed').length / similarOrders.length) * 100
+      : 0;
+
+    return `CLOUD KITCHEN AI MANAGER DECISION SUPPORT
 
 QUERY: ${query}
 
-DATASET STATS:
+BUSINESS CONTEXT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FULL DATASET:
 - Total Orders: ${stats.totalOrders}
 - Total Revenue: ₹${stats.totalRevenue}
-- Avg Rating: ${stats.avgRating}/5
-- Completed: ${stats.completedOrders} | Rejected: ${stats.rejectedOrders}
+- Average Rating: ${stats.avgRating}/5 ⭐
+- Completed: ${stats.completedOrders} (${((stats.completedOrders/stats.totalOrders)*100).toFixed(1)}%) | Rejected: ${stats.rejectedOrders} (${((stats.rejectedOrders/stats.totalOrders)*100).toFixed(1)}%)
+- Zomato Commission (est 35%): ₹${(stats.totalRevenue * 0.35).toFixed(0)}
+- Net Profit (est 65%): ₹${(stats.totalRevenue * 0.65).toFixed(0)}
 
-SIMILAR HISTORICAL ORDERS:
+SIMILAR HISTORICAL PATTERNS (from ${similarOrders.length} related orders):
+- Avg Order Value: ₹${avgSimilarValue.toFixed(0)}
+- Completion Rate: ${similarCompletionRate.toFixed(1)}%
+- Key Context Orders:
 ${similarContext}
 
-Please provide:
-1. Data-driven insights
-2. 2-3 specific actionable recommendations
-3. Risk assessment if applicable`;
+ANALYSIS REQUEST:
+Provide strategic, data-backed recommendations for a cloud kitchen manager.
+Focus on: actionable insights, specific metrics, business impact
+Format: Clear sections with bullet points for action items`;
   }
 
   /**
-   * Query local Llama 3.2 instance
+   * Query local Llama 3.2 instance with manager-focused prompt
    */
   private async queryLlama(
     context: string,
     userName: string,
     baseUrl: string
   ): Promise<string> {
-    const prompt = `You are 'KitchenOS DSS', a Decision Support System advisor for ${userName}'s cloud kitchen.
+    const systemPrompt = `You are 'KitchenManager AI', an expert Decision Support System advisor for ${userName}'s cloud kitchen business. 
+
+Your role:
+- Analyze business data and order patterns
+- Provide strategic, data-driven recommendations
+- Focus on actionable insights that improve profitability
+- Consider operational constraints and real-world applicability
+- Be specific about metrics and expected outcomes
+- Prioritize high-impact recommendations
+
+Guidelines:
+- Always cite specific numbers from the data
+- Provide 3-5 actionable recommendations ranked by impact
+- Include implementation difficulty (Easy/Medium/Hard)
+- Estimate expected business impact when possible
+- Consider competitive dynamics and customer satisfaction
+- Be concise but comprehensive`;
+
+    const prompt = `${systemPrompt}
 
 ${context}
 
-Provide strategic, data-backed recommendations. Be concise and actionable. Format your response with clear sections.`;
+Based on the above context, please provide strategic recommendations that the kitchen manager can implement immediately.`;
 
     const endpoints = [
       `${baseUrl}/api/generate`,
@@ -266,7 +299,8 @@ Provide strategic, data-backed recommendations. Be concise and actionable. Forma
             model: 'llama3.2',
             prompt,
             stream: false,
-            temperature: 0.3
+            temperature: 0.4,  // Slightly less random for business advice
+            top_p: 0.9
           })
         });
 
