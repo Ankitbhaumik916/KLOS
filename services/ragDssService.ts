@@ -31,6 +31,9 @@ class RAGDSSService {
   private embeddings: OrderEmbedding[] = [];
   private isInitialized = false;
   private modelPromise: Promise<any> | null = null;
+  private buildPromise: Promise<void> | null = null;
+  private lastKnowledgeBaseKey: string | null = null;
+  private lastSuccessfulEndpoint: string | null = null;
 
   /**
    * Initialize embeddings model (lazy load)
@@ -58,11 +61,48 @@ class RAGDSSService {
     try {
       const extractor = await this.initModel();
       const result = await extractor(text, { pooling: 'mean', normalize: true });
-      return Array.from(result.data);
+      return this.normalizeVector(Array.from(result.data));
     } catch (err) {
       console.warn('Embedding generation failed, using fallback:', err);
-      return this.simpleHashEmbedding(text);
+      return this.normalizeVector(this.simpleHashEmbedding(text));
     }
+  }
+
+  /**
+   * Generate embeddings in batches to avoid expensive per-item model invocations.
+   */
+  private async generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+
+    try {
+      const extractor = await this.initModel();
+      const result = await extractor(texts, { pooling: 'mean', normalize: true });
+      const raw = Array.from(result.data as ArrayLike<number>);
+      const dims = Array.isArray(result.dims) ? result.dims : [];
+
+      if (dims.length === 2 && dims[0] === texts.length) {
+        const vectorSize = dims[1];
+        const vectors: number[][] = [];
+        for (let i = 0; i < texts.length; i++) {
+          const start = i * vectorSize;
+          vectors.push(this.normalizeVector(raw.slice(start, start + vectorSize)));
+        }
+        return vectors;
+      }
+
+      // Some runtimes return a single vector when an array is passed; fall back safely.
+      if (texts.length === 1) {
+        return [this.normalizeVector(raw)];
+      }
+    } catch (err) {
+      console.warn('Batch embedding failed, falling back to per-item generation:', err);
+    }
+
+    const vectors: number[][] = [];
+    for (const text of texts) {
+      vectors.push(await this.generateEmbedding(text));
+    }
+    return vectors;
   }
 
   /**
@@ -86,6 +126,24 @@ class RAGDSSService {
   }
 
   /**
+   * Keep vectors unit-normalized so similarity can be a fast dot product.
+   */
+  private normalizeVector(vec: number[]): number[] {
+    const mag = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0));
+    if (!mag) return vec;
+    return vec.map(v => v / mag);
+  }
+
+  private createKnowledgeBaseKey(orders: ZomatoOrder[]): string {
+    const headIds = orders.slice(0, 10).map(o => o.orderId).join('|');
+    const tailIds = orders.slice(-10).map(o => o.orderId).join('|');
+    const revenueChecksum = orders
+      .reduce((sum, o, idx) => sum + (o.totalAmount || 0) * ((idx % 7) + 1), 0)
+      .toFixed(2);
+    return `${orders.length}:${headIds}:${tailIds}:${revenueChecksum}`;
+  }
+
+  /**
    * Build semantic summary of order for embeddings
    */
   private buildOrderSummary(order: ZomatoOrder): string {
@@ -96,36 +154,49 @@ class RAGDSSService {
    * Prepare all orders with embeddings
    */
   async buildKnowledgeBase(orders: ZomatoOrder[]): Promise<void> {
-    console.log(`Building RAG knowledge base for ${orders.length} orders...`);
-    this.embeddings = [];
+    const kbKey = this.createKnowledgeBaseKey(orders);
 
-    for (const order of orders) {
-      try {
-        const summary = this.buildOrderSummary(order);
-        const embedding = await this.generateEmbedding(summary);
-        this.embeddings.push({
-          orderId: order.orderId,
-          embedding,
-          order,
-          summary
-        });
-      } catch (err) {
-        console.warn(`Failed to embed order ${order.orderId}:`, err);
+    if (this.isInitialized && this.lastKnowledgeBaseKey === kbKey) {
+      return;
+    }
+
+    if (this.buildPromise) {
+      await this.buildPromise;
+      if (this.isInitialized && this.lastKnowledgeBaseKey === kbKey) {
+        return;
       }
     }
 
-    this.isInitialized = true;
-    console.log(`✓ RAG KB built with ${this.embeddings.length} embeddings`);
+    this.buildPromise = (async () => {
+      console.log(`Building RAG knowledge base for ${orders.length} orders...`);
+
+      const summaries = orders.map(order => this.buildOrderSummary(order));
+      const embeddedVectors = await this.generateEmbeddingsBatch(summaries);
+
+      this.embeddings = orders.map((order, idx) => ({
+        orderId: order.orderId,
+        embedding: embeddedVectors[idx] || this.normalizeVector(this.simpleHashEmbedding(summaries[idx])),
+        order,
+        summary: summaries[idx]
+      }));
+
+      this.isInitialized = true;
+      this.lastKnowledgeBaseKey = kbKey;
+      console.log(`✓ RAG KB built with ${this.embeddings.length} embeddings`);
+    })();
+
+    try {
+      await this.buildPromise;
+    } finally {
+      this.buildPromise = null;
+    }
   }
 
   /**
    * Cosine similarity between two vectors
    */
   private cosineSimilarity(a: number[], b: number[]): number {
-    const dotProduct = a.reduce((sum, val, i) => sum + val * (b[i] || 0), 0);
-    const magA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
-    const magB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
-    return magA && magB ? dotProduct / (magA * magB) : 0;
+    return a.reduce((sum, val, i) => sum + val * (b[i] || 0), 0);
   }
 
   /**
@@ -140,14 +211,29 @@ class RAGDSSService {
     try {
       const queryEmbedding = await this.generateEmbedding(query);
 
-      const similarities = this.embeddings.map(item => ({
-        ...item,
-        similarity: this.cosineSimilarity(queryEmbedding, item.embedding)
-      }));
+      const topMatches: Array<{ similarity: number; order: ZomatoOrder }> = [];
+      for (const item of this.embeddings) {
+        const similarity = this.cosineSimilarity(queryEmbedding, item.embedding);
 
-      return similarities
+        if (topMatches.length < topK) {
+          topMatches.push({ similarity, order: item.order });
+          continue;
+        }
+
+        let minIdx = 0;
+        for (let i = 1; i < topMatches.length; i++) {
+          if (topMatches[i].similarity < topMatches[minIdx].similarity) {
+            minIdx = i;
+          }
+        }
+
+        if (similarity > topMatches[minIdx].similarity) {
+          topMatches[minIdx] = { similarity, order: item.order };
+        }
+      }
+
+      return topMatches
         .sort((a, b) => b.similarity - a.similarity)
-        .slice(0, topK)
         .map(item => item.order);
     } catch (err) {
       console.error('Retrieval failed:', err);
@@ -290,7 +376,11 @@ Based on the above context, please provide strategic recommendations that the ki
       `${baseUrl}/api/completions`
     ];
 
-    for (const endpoint of endpoints) {
+    const orderedEndpoints = this.lastSuccessfulEndpoint
+      ? [this.lastSuccessfulEndpoint, ...endpoints.filter(ep => ep !== this.lastSuccessfulEndpoint)]
+      : endpoints;
+
+    for (const endpoint of orderedEndpoints) {
       try {
         console.log(`[RAG DSS] Attempting Llama at: ${endpoint}`);
         
@@ -320,6 +410,7 @@ Based on the above context, please provide strategic recommendations that the ki
 
         const data = await response.json();
         console.log(`[RAG DSS] Success from ${endpoint}`);
+        this.lastSuccessfulEndpoint = endpoint;
         
         if (data.response) return data.response;
         if (data.message?.content) return data.message.content;
@@ -577,6 +668,9 @@ RECOMMENDATIONS:
     this.embeddings = [];
     this.isInitialized = false;
     this.modelPromise = null;
+    this.buildPromise = null;
+    this.lastKnowledgeBaseKey = null;
+    this.lastSuccessfulEndpoint = null;
   }
 
   /**
