@@ -1,12 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ZomatoOrder, InsightResponse } from '../types';
-import { analyzeKitchenData } from '../services/geminiService';
-import { askAI } from '../services/qaService';
+import { analyzeKitchenData, getInsightsGeminiCooldownRemainingMs } from '../services/geminiService';
+import { askAI, getQaGeminiCooldownRemainingMs } from '../services/qaService';
+import { supabaseService } from '../services/supabaseService';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 
 interface GeminiInsightProps {
   orders: ZomatoOrder[];
   userName: string;
+  userId?: string;
 }
 
 interface ChatMessage {
@@ -15,12 +17,15 @@ interface ChatMessage {
   timestamp: number;
 }
 
-const GeminiInsight: React.FC<GeminiInsightProps> = ({ orders, userName }) => {
+const GeminiInsight: React.FC<GeminiInsightProps> = ({ orders, userName, userId }) => {
   const [insight, setInsight] = useState<InsightResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
+  const [activeOrdersCount, setActiveOrdersCount] = useState(orders.length);
+  const [syncHint, setSyncHint] = useState('Using loaded data');
+  const [geminiCooldownMs, setGeminiCooldownMs] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -31,12 +36,55 @@ const GeminiInsight: React.FC<GeminiInsightProps> = ({ orders, userName }) => {
     scrollToBottom();
   }, [chatMessages]);
 
+  useEffect(() => {
+    setActiveOrdersCount(orders.length);
+  }, [orders]);
+
+  useEffect(() => {
+    const tick = () => {
+      const insightCooldown = getInsightsGeminiCooldownRemainingMs();
+      const qaCooldown = getQaGeminiCooldownRemainingMs();
+      setGeminiCooldownMs(Math.max(insightCooldown, qaCooldown));
+    };
+
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const loadOrdersForAi = async (): Promise<ZomatoOrder[]> => {
+    if (!userId) {
+      setSyncHint('No user id; using loaded data');
+      return orders;
+    }
+
+    try {
+      const fresh = await supabaseService.loadOrders(userId);
+      if (fresh.length > 0) {
+        setActiveOrdersCount(fresh.length);
+        setSyncHint(`Synced from database (${fresh.length} orders)`);
+        return fresh;
+      }
+      setSyncHint('Database returned 0 rows; using loaded data');
+      return orders;
+    } catch (err) {
+      console.warn('AI insight DB sync failed, using loaded data:', err);
+      setSyncHint('DB sync failed; using loaded data');
+      return orders;
+    }
+  };
+
   const handleGenerateInsight = async () => {
-    if (orders.length === 0) return;
+    if (orders.length === 0 && !userId) return;
     setLoading(true);
     try {
-      const result = await analyzeKitchenData(orders, userName);
+      const sourceOrders = await loadOrdersForAi();
+      if (sourceOrders.length === 0) throw new Error('No orders found in database for analysis.');
+      const result = await analyzeKitchenData(sourceOrders, userName);
       setInsight(result);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Insight generation failed';
+      setChatMessages(prev => [...prev, { role: 'ai', content: `Error: ${errorMsg}`, timestamp: Date.now() }]);
     } finally {
       setLoading(false);
     }
@@ -44,7 +92,7 @@ const GeminiInsight: React.FC<GeminiInsightProps> = ({ orders, userName }) => {
 
   const handleAskQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim() || orders.length === 0 || chatLoading) return;
+    if (!chatInput.trim() || (orders.length === 0 && !userId) || chatLoading) return;
 
     const userMessage = chatInput;
     setChatInput('');
@@ -52,7 +100,9 @@ const GeminiInsight: React.FC<GeminiInsightProps> = ({ orders, userName }) => {
     setChatLoading(true);
 
     try {
-      const aiResponse = await askAI(userMessage, orders, userName);
+      const sourceOrders = await loadOrdersForAi();
+      if (sourceOrders.length === 0) throw new Error('No orders found in database for Q&A.');
+      const aiResponse = await askAI(userMessage, sourceOrders, userName);
       setChatMessages(prev => [...prev, { role: 'ai', content: aiResponse, timestamp: Date.now() }]);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to get AI response';
@@ -81,10 +131,14 @@ const GeminiInsight: React.FC<GeminiInsightProps> = ({ orders, userName }) => {
             
             <h3 className="text-3xl font-light text-[#fef3c7]">Kitchen Intelligence</h3>
             <p className="text-gray-400 leading-relaxed text-sm">
-               Activate deep learning models to analyze your {orders.length} order records. 
+              Gemini-first business intelligence over your order database. 
                Get insights on <span className="text-orange-400">Profitability</span>, 
                <span className="text-orange-400"> Menu Optimization</span>, and ask custom questions.
             </p>
+            <p className="text-xs text-gray-500">{syncHint}</p>
+            {geminiCooldownMs > 0 && (
+              <p className="text-xs text-amber-400">Gemini cooldown active: retrying in ~{Math.ceil(geminiCooldownMs / 1000)}s</p>
+            )}
             <button
                 onClick={handleGenerateInsight}
                 className="bg-orange-600 hover:bg-orange-500 text-white font-medium py-3 px-10 rounded-lg shadow-lg shadow-orange-900/20 transition-all hover:scale-105 uppercase tracking-widest text-xs"
@@ -97,7 +151,7 @@ const GeminiInsight: React.FC<GeminiInsightProps> = ({ orders, userName }) => {
       {loading && (
           <div className="flex-1 flex flex-col items-center justify-center gap-6 py-20">
               <div className="w-16 h-16 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
-              <p className="text-orange-200 font-mono text-xs uppercase tracking-widest">Processing {orders.length} records...</p>
+            <p className="text-orange-200 font-mono text-xs uppercase tracking-widest">Processing {activeOrdersCount} records...</p>
           </div>
       )}
 
@@ -199,6 +253,10 @@ const GeminiInsight: React.FC<GeminiInsightProps> = ({ orders, userName }) => {
           {/* Chat Starter */}
           <div className="mt-8 pt-6 border-t border-white/10">
             <p className="text-xs text-gray-400 mb-3">💬 Ask follow-up questions about your data:</p>
+            <p className="text-[11px] text-gray-500">{syncHint}</p>
+            {geminiCooldownMs > 0 && (
+              <p className="text-[11px] text-amber-400 mt-1">Gemini cooldown active: retrying in ~{Math.ceil(geminiCooldownMs / 1000)}s</p>
+            )}
           </div>
         </div>
       )}
@@ -239,12 +297,12 @@ const GeminiInsight: React.FC<GeminiInsightProps> = ({ orders, userName }) => {
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               placeholder="Ask about your data..."
-              disabled={chatLoading || orders.length === 0}
+              disabled={chatLoading || (orders.length === 0 && !userId)}
               className="flex-1 bg-[#121212] border border-white/10 rounded-lg px-4 py-3 text-[#fef3c7] placeholder-gray-600 focus:border-orange-500 focus:ring-1 focus:ring-orange-500 outline-none text-sm disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={chatLoading || orders.length === 0 || !chatInput.trim()}
+              disabled={chatLoading || (orders.length === 0 && !userId) || !chatInput.trim()}
               className="bg-orange-600 hover:bg-orange-500 disabled:bg-gray-700 text-white font-medium px-4 py-3 rounded-lg transition-all text-sm uppercase tracking-wider"
             >
               {chatLoading ? '...' : 'Ask'}

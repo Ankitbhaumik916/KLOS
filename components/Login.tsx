@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { authService } from '../services/authService';
+import { supabaseService } from '../services/supabaseService';
 import { User } from '../types';
 
 interface LoginProps {
@@ -14,37 +14,30 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    if (isSignup) {
-      if (!name || !email || !password) {
-        setError("All fields are required.");
-        return;
+    if (!email || !password || (isSignup && !name)) {
+      setError(isSignup ? "All fields are required." : "Email and access key are required.");
+      return;
+    }
+
+    try {
+      if (isSignup) {
+        await supabaseService.signUp(email, password);
+        // Optionally, save name to user profile table if needed
       }
-      const result = authService.signup({ name, email, password });
-      if (result.success) {
-        const user = authService.login(email, password);
-        if (user) {
-          setError('');
-          onLogin(user);
-        }
-      } else {
-        setError(result.message);
-      }
-    } else {
-      if (!email || !password) {
-        setError("Email and access key are required.");
-        return;
-      }
-      const user = authService.login(email, password);
+      const { user } = await supabaseService.signIn(email, password);
       if (user) {
         setError('');
-        onLogin(user);
+        const safeEmail = user.email || email;
+        onLogin({ name: name || safeEmail, email: safeEmail, id: user.id });
       } else {
         setError("Invalid email or access key.");
       }
+    } catch (err: any) {
+      setError(err.message || 'Authentication failed.');
     }
   };
 

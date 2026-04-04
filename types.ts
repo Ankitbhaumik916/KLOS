@@ -2,6 +2,7 @@
 export interface User {
   name: string;
   email: string;
+  id?: string;
   password?: string; // In a real app, never store plain text. For local DSS, simple storage.
 }
 

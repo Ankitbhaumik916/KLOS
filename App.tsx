@@ -1,15 +1,15 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { ZomatoOrder, User } from './types';
 import Dashboard from './components/Dashboard';
 import DataGrid from './components/DataGrid';
-import GeminiInsight from './components/GeminiInsight';
-import AIDeepdive from './components/AIDeepdive';
 import Login from './components/Login';
 import Settings from './components/Settings';
 import { parseCSV } from './services/csvService';
-import { storageService } from './services/storageService';
-import { authService } from './services/authService';
+import { supabaseService } from './services/supabaseService';
+
+const GeminiInsight = lazy(() => import('./components/GeminiInsight'));
+const AIDeepdive = lazy(() => import('./components/AIDeepdive'));
 
 type Tab = 'dashboard' | 'data' | 'ai' | 'deepdive';
 
@@ -22,43 +22,80 @@ const App: React.FC = () => {
 
   // Load User Session & Orders on Mount
   useEffect(() => {
-    const session = authService.getSession();
-    if (session) setUser(session);
-
-    const savedOrders = storageService.loadOrders();
-    setOrders(savedOrders);
-    
     // Enforce dark mode class
     document.documentElement.classList.add('dark');
+    // Try to restore auth session from Supabase
+    (async () => {
+      try {
+        const session = await supabaseService.getSession();
+        if (session && session.user) {
+          const email = session.user.email ?? `${session.user.id}@unknown.local`;
+          setUser({ name: email, email, id: session.user.id });
+        }
+      } catch (err) {
+        console.error('Session restore failed', err);
+      }
+    })();
   }, []);
+
+  // Load orders whenever the active user changes (initial session restore or manual login)
+  useEffect(() => {
+    (async () => {
+      if (!user?.id) {
+        setOrders([]);
+        return;
+      }
+
+      try {
+        const loadedOrders = await supabaseService.loadOrders(user.id);
+        setOrders(loadedOrders);
+      } catch (err) {
+        console.error('Failed to load orders for user', user.id, err);
+      }
+    })();
+  }, [user?.id]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
+    if (file && user?.id) {
       setIsUploading(true);
       try {
         const parsedOrders = await parseCSV(file);
-        const merged = storageService.saveOrders(parsedOrders);
-        setOrders(merged);
+        // Convert orderPlacedAt from ms to s if needed
+        parsedOrders.forEach(order => {
+          if (order.orderPlacedAt && order.orderPlacedAt > 9999999999) {
+            order.orderPlacedAt = Math.floor(order.orderPlacedAt / 1000);
+          }
+        });
+        await supabaseService.saveOrders(user.id, parsedOrders);
+        const loadedOrders = await supabaseService.loadOrders(user.id);
+        setOrders(loadedOrders);
       } catch (err) {
         console.error("CSV Parse Error", err);
-        alert("Failed to parse CSV file.");
+        alert("Failed to parse CSV file or save to cloud.");
       } finally {
         setIsUploading(false);
       }
     }
   };
 
-  const handleClearData = () => {
+  const handleClearData = async () => {
     if (window.confirm("Are you sure you want to clear all stored data? This cannot be undone.")) {
-      storageService.clearOrders();
-      setOrders([]);
+      try {
+        if (!user?.id) throw new Error('No signed-in user id');
+        await supabaseService.clearOrders(user.id);
+        setOrders([]);
+      } catch (err) {
+        console.error('Failed to purge cloud orders', err);
+        alert('Failed to purge cloud data.');
+      }
     }
   };
 
-  const handleExportData = () => {
+  const handleExportData = async () => {
     try {
-      const data = storageService.loadOrders();
+      if (!user?.id) throw new Error('No signed-in user id');
+      const data = await supabaseService.loadOrders(user.id);
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -76,25 +113,35 @@ const App: React.FC = () => {
 
   const handleImportJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !user?.id) return;
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text) as ZomatoOrder[];
-      const merged = storageService.saveOrders(parsed);
-      setOrders(merged);
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) {
+        throw new Error('JSON must be an array of orders.');
+      }
+
+      await supabaseService.saveOrders(user.id, parsed as ZomatoOrder[]);
+      const loadedOrders = await supabaseService.loadOrders(user.id);
+      setOrders(loadedOrders);
       alert('Import successful.');
     } catch (err) {
       console.error('Import failed', err);
       alert('Failed to import JSON data. Ensure it matches expected format.');
     } finally {
-      // clear the input so same file can be selected again
       (e.target as HTMLInputElement).value = '';
     }
   };
 
-  const handleLogout = () => {
-    authService.logout();
-    setUser(null);
+  const handleLogout = async () => {
+    try {
+      await supabaseService.signOut();
+    } catch (err) {
+      console.error('Sign out failed', err);
+    } finally {
+      setOrders([]);
+      setUser(null);
+    }
   };
 
   if (!user) {
@@ -238,8 +285,12 @@ const App: React.FC = () => {
               <div className="min-h-[500px]">
                  {activeTab === 'dashboard' && <Dashboard orders={orders} user={user} />}
                  {activeTab === 'data' && <DataGrid orders={orders} />}
-                 {activeTab === 'ai' && <GeminiInsight orders={orders} userName={user.name} />}
-                 {activeTab === 'deepdive' && <AIDeepdive orders={orders} userName={user.name} />}
+                  {(activeTab === 'ai' || activeTab === 'deepdive') && (
+                   <Suspense fallback={<div className="text-sm text-gray-400 py-8">Loading AI module...</div>}>
+                    {activeTab === 'ai' && <GeminiInsight orders={orders} userName={user.name} userId={user.id} />}
+                    {activeTab === 'deepdive' && <AIDeepdive orders={orders} userName={user.name} />}
+                   </Suspense>
+                  )}
               </div>
            </div>
         )}

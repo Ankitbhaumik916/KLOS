@@ -1,271 +1,165 @@
-# KLOS - Cloudkitchen AI Order Management System
+# KitchenOS (Current Implementation README)
 
-[![GitHub](https://img.shields.io/badge/GitHub-Ankitbhaumik916/KLOS-blue)](https://github.com/Ankitbhaumik916/KLOS)
-![React](https://img.shields.io/badge/React-19.2.0-61DAFB?logo=react)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.8.2-3178C6?logo=typescript)
-![Vite](https://img.shields.io/badge/Vite-6.2.0-646CFF?logo=vite)
-![License](https://img.shields.io/badge/License-MIT-green)
+This README is intentionally scoped to what is currently implemented in code.
 
-> **KLOS** is an intelligent order management and analysis platform designed for cloud kitchen operations. It combines real-time dashboards, AI-powered insights, and advanced data analytics to optimize operations and decision-making.
+## What This App Currently Does
 
-## 🚀 Features
+- React + TypeScript + Vite single-page app for cloud-kitchen order analysis.
+- Email/password auth through Supabase Auth (sign up + sign in).
+- Loads and saves order records to Supabase table orders, scoped by user_id.
+- CSV ingestion for Zomato-like exports (header name matching is flexible).
+- Dashboard tab with metrics and charts:
+  - Revenue trend
+  - Top items
+  - Hourly order activity
+  - Order status distribution
+- AI Insights tab:
+  - Generates Gemini-first business insights (demand, customer, profitability, recommendations)
+  - Includes a follow-up Gemini-first Q and A chat over the loaded dataset
+  - Fetches fresh orders from Supabase before insight/chat requests
+  - Includes deterministic local fallback when Gemini is unavailable
+- AI Deep Dive tab:
+  - Builds embeddings from loaded orders
+  - Retrieves similar historical orders for a query
+  - Produces recommendations and summary (LLM response when available, local fallback otherwise)
+- Data operations in UI header:
+  - Import CSV
+  - Import JSON
+  - Export JSON
 
-### Core Functionality
-- **📊 Dashboard** - Real-time order metrics, revenue tracking, and performance indicators
-- **📋 Order Management** - Live order tracking, status updates, and order history
-- **📈 Data Grid** - Interactive data table with advanced filtering and sorting capabilities
-- **⚙️ Settings** - User preferences, API configuration, and system settings
+## What Is In Repo But Not Wired Into Main App Flow
 
-### AI-Powered Features
-- **🤖 Gemini Insights** - AI-generated business insights and recommendations powered by Google's Gemini API
-- **🧠 AI Deep Dive** - Advanced analysis using Retrieval-Augmented Generation (RAG) with local Llama 3.2 model for intelligent pattern recognition and strategic recommendations
+- AIManagerDashboard component exists but is not mounted from App.tsx.
+- businessMetricsService exists and is used by AIManagerDashboard only.
+- authService and storageService (localStorage-based auth/storage) exist but the app currently uses Supabase service in main flow.
+- mockSocketService is a stub and not used in the current app flow.
 
-### Data Processing
-- **📁 CSV Import** - Seamless upload and parsing of order history data
-- **🔐 User Authentication** - Secure login and session management
-- **💾 Local Storage** - Persistent data storage for offline access
+## Known Behavior (Current Code)
 
-## 🛠️ Tech Stack
+- DataGrid has an Export JSON button in that panel header, but no click handler is attached there.
+- App enforces dark mode class on mount.
 
-- **Frontend Framework:** React 19.2.0
-- **Language:** TypeScript 5.8.2
-- **Build Tool:** Vite 6.2.0
-- **UI Components:** Custom React components with Tailwind CSS
-- **AI Integration:** 
-  - Google Gemini API (cloud-based)
-  - Ollama + Llama 3.2 (local inference)
-- **Data Visualization:** Recharts
-- **NLP/ML:** Hugging Face Transformers.js
-- **Backend Proxy:** Express.js with CORS support
+## Stack Actually Used
 
-## 📋 Prerequisites
+- React 19
+- TypeScript 5
+- Vite 6
+- Recharts (dashboard charts)
+- Supabase JS client
+- Google GenAI SDK (present and callable through current service path)
+- Transformers.js (embedding model in RAG deep dive)
+- Express + http-proxy-middleware (optional local LLM proxy)
 
-- **Node.js** v16 or higher
-- **npm** or **yarn** package manager
-- **Google Gemini API Key** (for AI insights)
-- **Ollama** (for AI Deep Dive feature)
+## Prerequisites
 
-## 🔧 Installation
+- Node.js 18+ recommended
+- npm
+- Supabase project (required)
+- Optional for local LLM features:
+  - Ollama (or compatible local endpoint)
+  - LLM proxy from this repo (optional but useful for browser CORS/networking)
 
-### 1. Clone the Repository
+## Environment Variables
 
-```bash
-git clone https://github.com/Ankitbhaumik916/KLOS.git
-cd KLOS
+Create .env.local in project root:
+
+```env
+VITE_SUPABASE_URL=your_supabase_project_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+
+# Optional cloud AI path used by current Vite define mapping:
+GEMINI_API_KEY=your_google_gemini_api_key
+
+# Optional (service initialization also reads this key):
+VITE_GEMINI_API_KEY=your_google_gemini_api_key
 ```
 
-### 2. Install Dependencies
+Notes:
+
+- Supabase URL and anon key are required. App throws on startup if missing.
+- GEMINI_API_KEY is read via Vite define mapping for process.env.API_KEY in current code path.
+
+## Install And Run
 
 ```bash
 npm install
-```
-
-### 3. Environment Setup
-
-Create a `.env.local` file in the project root:
-
-```env
-VITE_GEMINI_API_KEY=your_gemini_api_key_here
-```
-
-Get your Gemini API key from: https://ai.google.dev/
-
-### 4. Optional: Setup AI Deep Dive (RAG System)
-
-For local AI analysis capabilities, install Ollama:
-
-**Windows Users - Automated Setup:**
-```bash
-# Simply run the batch script
-setup-ollama.bat
-```
-
-**Manual Setup (All Platforms):**
-
-```bash
-# 1. Download Ollama from https://ollama.ai
-# 2. Install Ollama and verify installation
-ollama --version
-
-# 3. Download Llama 3.2 model (~4.7GB)
-ollama pull llama3.2
-
-# 4. Start Ollama server (in a separate terminal)
-ollama serve
-```
-
-## 🚀 Running the Application
-
-### Development Mode
-
-```bash
 npm run dev
 ```
 
-The application will be available at `http://localhost:5173`
+Default Vite dev server is configured for port 3000.
 
-### Production Build
+Production build:
 
 ```bash
 npm run build
 npm run preview
 ```
 
-### Start LLM Proxy (for AI Deep Dive)
+## Optional Local LLM Setup
 
-In a separate terminal:
+1. Start Ollama on default port 11434.
+2. Start proxy from this repo:
 
 ```bash
 npm run start-llm-proxy
 ```
 
-## 📁 Project Structure
+Proxy defaults:
 
-```
-├── components/              # React components
-│   ├── Dashboard.tsx       # Main dashboard view
-│   ├── DataGrid.tsx        # Order data table
-│   ├── LiveOrders.tsx      # Real-time order feed
-│   ├── GeminiInsight.tsx   # AI insights panel
-│   ├── AIDeepdive.tsx      # RAG-based analysis
-│   ├── Login.tsx           # Authentication
-│   ├── Settings.tsx        # User settings
-│   └── ConnectModal.tsx    # Connection dialog
-├── services/               # Business logic
-│   ├── authService.ts      # User authentication
-│   ├── csvService.ts       # CSV parsing
-│   ├── geminiService.ts    # Gemini API integration
-│   ├── ragDssService.ts    # RAG decision support
-│   ├── qaService.ts        # Q&A functionality
-│   ├── storageService.ts   # Data persistence
-│   └── agentService.ts     # Agent coordination
-├── tools/                  # Utilities
-│   └── llm-proxy/         # LLM proxy server
-├── order_history/         # Sample order data
-├── App.tsx                # Main application
-├── index.tsx              # React entry point
-├── types.ts               # TypeScript definitions
-└── vite.config.ts         # Vite configuration
-```
+- Listens on http://localhost:11435
+- Forwards to http://localhost:11434 (or LLM_TARGET if set)
 
-## 💡 Feature Details
+In-app settings panel allows changing:
 
-### Dashboard
-- Order count and revenue metrics
-- Average customer ratings
-- Completion rate analytics
-- Real-time status indicators
+- localAi.url
+- localAi.exactUrl
+- localAi.model
 
-### AI Insights (Gemini)
-- Automated business recommendations
-- Performance analysis
-- Trend identification
-- Quick recommendations
+## Docker Setup (Frontend + Proxy + Ollama)
 
-### AI Deep Dive (RAG + Llama)
-The RAG system provides intelligent analysis by:
-1. **Semantic Search** - Finding similar historical orders
-2. **Context Building** - Creating rich contextual information
-3. **LLM Analysis** - Generating strategic recommendations
+The repository now includes a Docker Compose stack:
 
-### Data Management
-- Upload CSV order files
-- Filter and sort order data
-- Export analytics
-- View historical trends
+- Frontend (Vite) on `5173`
+- LLM proxy on `11435`
+- Ollama on `11434`
+- One-time model pull service (`ollama-init`) for `llama3.2`
 
-## 🔐 Authentication
-
-The application includes a simple authentication system. Default credentials can be configured in settings.
-
-For production deployment, integrate with:
-- OAuth 2.0 providers
-- Enterprise SSO
-- JWT-based authentication
-
-## 🌐 Deployment
-
-### Vercel (Recommended)
+Run:
 
 ```bash
-npm run build
-# Deploy the 'dist' folder to Vercel
+docker compose up --build
 ```
 
-The project includes `vercel.json` for automatic Vercel deployment.
+Files:
 
-### Other Platforms
+- `docker-compose.yml`
+- `Dockerfile.frontend`
+- `tools/llm-proxy/Dockerfile.proxy`
 
-The build output is in the `dist` directory and can be deployed to any static hosting service (Netlify, GitHub Pages, AWS S3, etc.).
+Environment notes:
 
-## ⚙️ Configuration
+- Compose reads `VITE_GEMINI_API_KEY`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` from your shell or `.env` file.
+- `tools/llm-proxy/proxy.cjs` accepts `OLLAMA_URL` (preferred) and `LLM_TARGET`.
 
-### API Keys
+## Data Format Expectations
 
-Set in `.env.local`:
-```env
-VITE_GEMINI_API_KEY=your_key_here
-VITE_OLLAMA_URL=http://localhost:11434
-```
+CSV parser supports flexible column names. It tries to map:
 
-### Customization
+- order id / orderid
+- restaurant name / restaurant
+- order placed at / date / created at
+- order status / status
+- total / grand total / final amount
+- rating
+- items in order / items
+- city
 
-- Modify `types.ts` for data structure changes
-- Update `services/` for API integrations
-- Customize components in `components/` folder
-- Adjust styling in component files
+## Main Runtime Files
 
-## 📊 Sample Data
-
-The project includes historical order data in the `order_history_20251127_20251207/` directory with 1134+ orders spanning multiple weeks for testing and analysis.
-
-## 🐛 Troubleshooting
-
-### Gemini API Issues
-- Verify API key is correct in `.env.local`
-- Check Google Cloud project quotas
-- Ensure API is enabled in Google Cloud Console
-
-### AI Deep Dive Not Working
-- Verify Ollama is running: `http://localhost:11434`
-- Check Llama 3.2 model is downloaded: `ollama list`
-- Run LLM proxy: `npm run start-llm-proxy`
-
-### Build Errors
-```bash
-# Clear node_modules and reinstall
-rm -rf node_modules
-npm install
-npm run build
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Commit changes: `git commit -m "Add feature description"`
-4. Push to branch: `git push origin feature/your-feature`
-5. Submit a Pull Request
-
-## 📝 License
-
-This project is licensed under the MIT License - see LICENSE file for details.
-
-## 👤 Author
-
-**Ankit Bhaumik**
-- GitHub: [@Ankitbhaumik916](https://github.com/Ankitbhaumik916)
-- Project: [KLOS Repository](https://github.com/Ankitbhaumik916/KLOS)
-
-## 📞 Support
-
-For issues, questions, or suggestions:
-- Open an issue on GitHub
-- Check existing documentation
-- Review the RAG_DSS_GUIDE.md for AI features
-
----
-
-**Made with ❤️ for optimizing cloud kitchen operations**
+- App shell and tab routing: App.tsx
+- Supabase auth + orders persistence: services/supabaseService.ts
+- CSV parsing: services/csvService.ts
+- Dashboard metrics + charts: components/Dashboard.tsx
+- AI insights + QA: components/GeminiInsight.tsx
+- RAG deep dive: components/AIDeepdive.tsx, services/ragDssService.ts
+- Optional proxy server: tools/llm-proxy/proxy.cjs

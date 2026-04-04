@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json());
 app.use(cors({ origin: true }));
 
-const TARGET = process.env.LLM_TARGET || 'http://localhost:11434';
+const TARGET = process.env.OLLAMA_URL || process.env.LLM_TARGET || 'http://localhost:11434';
 
 app.use('/api', createProxyMiddleware({
   target: TARGET,

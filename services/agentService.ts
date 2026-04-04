@@ -50,13 +50,16 @@ export async function analyzeWithLocalModel(orders: ZomatoOrder[], userName: str
   const exactUrl = (typeof window !== 'undefined' && localStorage.getItem(LOCAL_AI_EXACT_URL_KEY)) || null;
   const prompt = buildPrompt(orders, userName);
 
-  // If an exact URL is provided, try only that. Otherwise try common Ollama-style endpoints.
-  const tryEndpoints = exactUrl ? [exactUrl] : [
+  // If an exact URL is provided, try it first, then common endpoints.
+  const commonEndpoints = [
     `${baseUrl}/api/generate`,
     `${baseUrl}/api/completions`,
     `${baseUrl}/v1/generate`,
     `${baseUrl}/generate`,
   ];
+  const tryEndpoints = exactUrl
+    ? [exactUrl, ...commonEndpoints.filter((endpoint) => endpoint !== exactUrl)]
+    : commonEndpoints;
 
   // Allow the model name to be configured via localStorage (useful for Llama3)
   const configuredModel = (typeof window !== 'undefined' && localStorage.getItem(LOCAL_AI_MODEL_KEY)) || 'phi-3mini';

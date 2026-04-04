@@ -1,12 +1,11 @@
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   BarChart, Bar, Cell, PieChart, Pie, Legend
 } from 'recharts';
-import { ZomatoOrder, HourlyData, StatusDistribution, User, InsightResponse } from '../types';
+import { ZomatoOrder, HourlyData, StatusDistribution, User } from '../types';
 import { extractTopItems } from '../services/csvService';
-import { analyzeKitchenData } from '../services/geminiService';
 
 interface DashboardProps {
   orders: ZomatoOrder[];
@@ -15,19 +14,6 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ orders, user }) => {
   const [dateRange, setDateRange] = useState<'all' | '30' | '7'>('all');
-  const [jarvisInsight, setJarvisInsight] = useState<InsightResponse | null>(null);
-  const [loadingJarvis, setLoadingJarvis] = useState(false);
-
-  // Trigger Jarvis analysis on mount (or when orders change)
-  useEffect(() => {
-    if (orders.length > 0) {
-      setLoadingJarvis(true);
-      analyzeKitchenData(orders, user.name)
-        .then(res => setJarvisInsight(res))
-        .catch(err => console.error("Jarvis failed", err))
-        .finally(() => setLoadingJarvis(false));
-    }
-  }, [orders, user.name]);
 
   // Filter Orders based on Date Range
   const filteredOrders = useMemo(() => {
@@ -104,6 +90,20 @@ const Dashboard: React.FC<DashboardProps> = ({ orders, user }) => {
     }));
   }, [filteredOrders]);
 
+  const bannerGreeting = useMemo(() => {
+    return `Welcome, ${user.name}. Dashboard synced with your latest order data.`;
+  }, [user.name]);
+
+  const bannerAlert = useMemo(() => {
+    const timestamps = orders.map(o => Number(o.orderPlacedAt)).filter(t => !Number.isNaN(t));
+    if (timestamps.length === 0) return 'No timestamp data available yet.';
+
+    const daysSinceLastOrder = Math.floor((Date.now() - Math.max(...timestamps)) / (1000 * 60 * 60 * 24));
+    return daysSinceLastOrder > 7
+      ? `Data is ${daysSinceLastOrder} days old. Upload newer records for fresher insights.`
+      : 'System is running efficiently. No critical alerts.';
+  }, [orders]);
+
   if (orders.length === 0) return null;
 
   return (
@@ -113,23 +113,19 @@ const Dashboard: React.FC<DashboardProps> = ({ orders, user }) => {
       <div className="bg-[#1c1c1e] rounded-xl border border-orange-500/20 p-6 shadow-lg relative overflow-hidden">
         <div className="relative z-10 flex gap-4 items-start">
            <div className="w-12 h-12 rounded-full bg-orange-500/10 flex items-center justify-center border border-orange-500/30">
-             {loadingJarvis ? (
-                <div className="w-6 h-6 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
-             ) : (
-                <svg className="w-6 h-6 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-             )}
+             <svg className="w-6 h-6 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
            </div>
            <div className="flex-1">
               <h2 className="text-xl font-medium text-[#fef3c7] mb-1">
-                 {jarvisInsight ? jarvisInsight.greeting : `Welcome, ${user.name}. Analyzing shift data...`}
+                {bannerGreeting}
               </h2>
-              {jarvisInsight?.alert ? (
+              {bannerAlert.includes('old') ? (
                  <div className="bg-red-900/20 border border-red-500/30 text-red-200 px-3 py-2 rounded-lg text-sm mt-2 flex items-center gap-2 max-w-fit">
                     <svg className="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                    {jarvisInsight.alert}
+                  {bannerAlert}
                  </div>
               ) : (
-                <p className="text-gray-400 text-sm mt-1">System is running efficiently. No critical alerts.</p>
+               <p className="text-gray-400 text-sm mt-1">{bannerAlert}</p>
               )}
            </div>
         </div>

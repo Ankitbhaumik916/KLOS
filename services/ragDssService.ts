@@ -1,9 +1,32 @@
 import { ZomatoOrder } from '../types';
 import { env } from '@xenova/transformers';
+import { GoogleGenAI, Type } from '@google/genai';
 
 // Set Transformers.js to use remote models (prevent local storage bloat during inference)
 env.allowRemoteModels = true;
-env.allowLocalModels = true;
+env.allowLocalModels = false;
+
+const geminiApiKey =
+  import.meta.env.VITE_GEMINI_API_KEY ||
+  (typeof process !== 'undefined' ? process.env.API_KEY : undefined) ||
+  (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : undefined) ||
+  '';
+
+const geminiClient = geminiApiKey ? new GoogleGenAI({ apiKey: geminiApiKey }) : null;
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+const GEMINI_RATE_LIMIT_COOLDOWN_MS = 60 * 1000;
+
+let deepDiveGeminiCooldownUntil = 0;
+
+export function getDeepDiveGeminiCooldownRemainingMs(): number {
+  return Math.max(0, deepDiveGeminiCooldownUntil - Date.now());
+}
+
+function isRateLimitError(err: any): boolean {
+  const message = String(err?.message || err || '').toLowerCase();
+  const status = Number(err?.status || err?.code || 0);
+  return status === 429 || message.includes('429') || message.includes('too many requests') || message.includes('rate limit');
+}
 
 interface OrderEmbedding {
   orderId: string;
@@ -30,10 +53,11 @@ interface DSSAnalysis {
 class RAGDSSService {
   private embeddings: OrderEmbedding[] = [];
   private isInitialized = false;
-  private modelPromise: Promise<any> | null = null;
+  private modelPromise: Promise<any | null> | null = null;
   private buildPromise: Promise<void> | null = null;
   private lastKnowledgeBaseKey: string | null = null;
   private lastSuccessfulEndpoint: string | null = null;
+  private warnedModelUnavailable = false;
 
   /**
    * Initialize embeddings model (lazy load)
@@ -46,8 +70,11 @@ class RAGDSSService {
         const { pipeline } = await import('@xenova/transformers');
         return await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
       } catch (err) {
-        console.error('Failed to load embedding model:', err);
-        throw err;
+        if (!this.warnedModelUnavailable) {
+          console.warn('Embedding model unavailable, using hash embeddings fallback:', err);
+          this.warnedModelUnavailable = true;
+        }
+        return null;
       }
     })();
 
@@ -60,6 +87,9 @@ class RAGDSSService {
   private async generateEmbedding(text: string): Promise<number[]> {
     try {
       const extractor = await this.initModel();
+      if (!extractor) {
+        return this.normalizeVector(this.simpleHashEmbedding(text));
+      }
       const result = await extractor(text, { pooling: 'mean', normalize: true });
       return this.normalizeVector(Array.from(result.data));
     } catch (err) {
@@ -76,6 +106,9 @@ class RAGDSSService {
 
     try {
       const extractor = await this.initModel();
+      if (!extractor) {
+        return texts.map((text) => this.normalizeVector(this.simpleHashEmbedding(text)));
+      }
       const result = await extractor(texts, { pooling: 'mean', normalize: true });
       const raw = Array.from(result.data as ArrayLike<number>);
       const dims = Array.isArray(result.dims) ? result.dims : [];
@@ -256,18 +289,11 @@ class RAGDSSService {
     // Step 2: Build context for Llama
     const context = this.buildLlamaContext(orders, similarOrders, query);
 
-    // Step 3: Query Llama for deep analysis
-    let llamaResponse = '';
-    try {
-      llamaResponse = await this.queryLlama(context, userName, baseUrl);
-    } catch (err) {
-      console.warn('Llama query failed, using local analysis:', err);
-      llamaResponse = this.localDSSFallback(similarOrders, query, userName);
-    }
+    // Step 3: Query Gemini only (no local LLM fallback)
+    const geminiResult = await this.queryGeminiDSS(context, query, userName);
 
-    // Step 4: Parse response into structured recommendations
-    const recommendations = this.parseRecommendations(llamaResponse);
-    const executiveSummary = this.generateExecutiveSummary(similarOrders, query);
+    const recommendations = geminiResult.recommendations;
+    const executiveSummary = geminiResult.executiveSummary || this.generateExecutiveSummary(similarOrders, query);
 
     return {
       timestamp: new Date().toISOString(),
@@ -275,6 +301,88 @@ class RAGDSSService {
       similarOrders: similarOrders.slice(0, 3), // Return top 3 for display
       recommendations,
       executiveSummary
+    };
+  }
+
+  private async queryGeminiDSS(
+    context: string,
+    query: string,
+    userName: string
+  ): Promise<{ recommendations: DSSRecommendation[]; executiveSummary: string }> {
+    if (!geminiClient) {
+      throw new Error('Gemini API key is missing. Set VITE_GEMINI_API_KEY (or GEMINI_API_KEY) to use AI Deep Dive.');
+    }
+
+    if (Date.now() < deepDiveGeminiCooldownUntil) {
+      const waitSec = Math.ceil((deepDiveGeminiCooldownUntil - Date.now()) / 1000);
+      throw new Error(`Gemini is temporarily rate-limited for Deep Dive. Retry in ~${waitSec}s.`);
+    }
+
+    const prompt = `You are KitchenOS Deep Dive AI for ${userName}.\n\nUse only the provided context to answer the query with practical business recommendations.\n\nQUERY: ${query}\n\nCONTEXT:\n${context}\n\nReturn JSON only.`;
+
+    let text = '';
+    let lastError: unknown = null;
+    for (const model of GEMINI_MODELS) {
+      try {
+        const response = await geminiClient.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                executiveSummary: { type: Type.STRING },
+                recommendations: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      category: { type: Type.STRING },
+                      insight: { type: Type.STRING },
+                      actionItems: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING }
+                      },
+                      confidenceScore: { type: Type.NUMBER }
+                    },
+                    required: ['category', 'insight', 'actionItems', 'confidenceScore']
+                  }
+                }
+              },
+              required: ['executiveSummary', 'recommendations']
+            }
+          }
+        });
+
+        text = response.text || '';
+        if (text) break;
+      } catch (err) {
+        lastError = err;
+        if (!isRateLimitError(err)) {
+          throw err;
+        }
+      }
+    }
+
+    if (!text) {
+      if (isRateLimitError(lastError)) {
+        deepDiveGeminiCooldownUntil = Date.now() + GEMINI_RATE_LIMIT_COOLDOWN_MS;
+      }
+      throw new Error('Gemini returned no Deep Dive response (possibly rate-limited). Please retry shortly.');
+    }
+
+    const parsed = JSON.parse(text) as { executiveSummary?: string; recommendations?: DSSRecommendation[] };
+    const recommendations = (parsed.recommendations || []).map((rec) => ({
+      category: rec.category || 'Strategy',
+      insight: rec.insight || 'No insight provided.',
+      actionItems: Array.isArray(rec.actionItems) ? rec.actionItems : [],
+      confidenceScore: Math.max(0, Math.min(1, Number(rec.confidenceScore ?? 0.7))),
+    }));
+
+    return {
+      executiveSummary: parsed.executiveSummary || '',
+      recommendations,
     };
   }
 
@@ -286,6 +394,11 @@ class RAGDSSService {
     similarOrders: ZomatoOrder[],
     query: string
   ): string {
+    const completedOrders = allOrders.filter(o => this.isCompletedStatus(o.orderStatus)).length;
+    const rejectedOrders = allOrders.filter(o => this.isRejectedStatus(o.orderStatus)).length;
+    const cancelledOrders = allOrders.filter(o => this.isCancelledStatus(o.orderStatus)).length;
+    const peakHours = this.getPeakHours(allOrders, 3);
+
     const stats = {
       totalOrders: allOrders.length,
       totalRevenue: allOrders.reduce((sum, o) => sum + o.totalAmount, 0),
@@ -293,8 +406,9 @@ class RAGDSSService {
         ? (allOrders.filter(o => o.rating).reduce((sum, o) => sum + (o.rating || 0), 0) / 
           allOrders.filter(o => o.rating).length).toFixed(2)
         : 'N/A',
-      completedOrders: allOrders.filter(o => o.orderStatus === 'Completed').length,
-      rejectedOrders: allOrders.filter(o => o.orderStatus === 'Rejected').length
+      completedOrders,
+      rejectedOrders,
+      cancelledOrders
     };
 
     const similarContext = similarOrders
@@ -309,7 +423,7 @@ class RAGDSSService {
       ? similarOrders.reduce((sum, o) => sum + o.totalAmount, 0) / similarOrders.length 
       : 0;
     const similarCompletionRate = similarOrders.length > 0
-      ? (similarOrders.filter(o => o.orderStatus === 'Completed').length / similarOrders.length) * 100
+      ? (similarOrders.filter(o => this.isCompletedStatus(o.orderStatus)).length / similarOrders.length) * 100
       : 0;
 
     return `CLOUD KITCHEN AI MANAGER DECISION SUPPORT
@@ -322,7 +436,10 @@ FULL DATASET:
 - Total Orders: ${stats.totalOrders}
 - Total Revenue: ₹${stats.totalRevenue}
 - Average Rating: ${stats.avgRating}/5 ⭐
-- Completed: ${stats.completedOrders} (${((stats.completedOrders/stats.totalOrders)*100).toFixed(1)}%) | Rejected: ${stats.rejectedOrders} (${((stats.rejectedOrders/stats.totalOrders)*100).toFixed(1)}%)
+- Completed/Delivered: ${stats.completedOrders} (${((stats.completedOrders / Math.max(1, stats.totalOrders)) * 100).toFixed(1)}%)
+- Rejected: ${stats.rejectedOrders} (${((stats.rejectedOrders / Math.max(1, stats.totalOrders)) * 100).toFixed(1)}%)
+- Cancelled: ${stats.cancelledOrders} (${((stats.cancelledOrders / Math.max(1, stats.totalOrders)) * 100).toFixed(1)}%)
+- Peak Demand Hours: ${peakHours.length ? peakHours.join(', ') : 'Unavailable'}
 - Zomato Commission (est 35%): ₹${(stats.totalRevenue * 0.35).toFixed(0)}
 - Net Profit (est 65%): ₹${(stats.totalRevenue * 0.65).toFixed(0)}
 
@@ -336,6 +453,39 @@ ANALYSIS REQUEST:
 Provide strategic, data-backed recommendations for a cloud kitchen manager.
 Focus on: actionable insights, specific metrics, business impact
 Format: Clear sections with bullet points for action items`;
+  }
+
+  private isCompletedStatus(status: string): boolean {
+    const s = (status || '').toLowerCase();
+    return s.includes('deliver') || s.includes('complete') || s.includes('fulfilled');
+  }
+
+  private isRejectedStatus(status: string): boolean {
+    const s = (status || '').toLowerCase();
+    return s.includes('reject') || s.includes('fail');
+  }
+
+  private isCancelledStatus(status: string): boolean {
+    const s = (status || '').toLowerCase();
+    return s.includes('cancel');
+  }
+
+  private getPeakHours(orders: ZomatoOrder[], topN: number): string[] {
+    const counts = new Array(24).fill(0);
+
+    for (const order of orders) {
+      const t = new Date(order.orderPlacedAt);
+      if (!Number.isNaN(t.getTime())) {
+        counts[t.getHours()] += 1;
+      }
+    }
+
+    return counts
+      .map((count, hour) => ({ hour, count }))
+      .filter(x => x.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, topN)
+      .map(x => `${x.hour.toString().padStart(2, '0')}:00-${((x.hour + 1) % 24).toString().padStart(2, '0')}:00 (${x.count} orders)`);
   }
 
   /**
@@ -670,7 +820,7 @@ RECOMMENDATIONS:
     this.modelPromise = null;
     this.buildPromise = null;
     this.lastKnowledgeBaseKey = null;
-    this.lastSuccessfulEndpoint = null;
+    this.warnedModelUnavailable = false;
   }
 
   /**

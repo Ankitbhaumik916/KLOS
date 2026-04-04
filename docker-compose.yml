@@ -1,0 +1,48 @@
+version: '3.9'
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - '5173:5173'
+    environment:
+      - VITE_GEMINI_API_KEY=${VITE_GEMINI_API_KEY}
+      - VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
+    depends_on:
+      - llm-proxy
+      - ollama
+    volumes:
+      - .:/app
+      - /app/node_modules
+
+  llm-proxy:
+    build:
+      context: ./tools/llm-proxy
+      dockerfile: Dockerfile.proxy
+    ports:
+      - '11435:11435'
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - PORT=11435
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - '11434:11434'
+    volumes:
+      - ollama_data:/root/.ollama
+
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama
+    entrypoint: >
+      sh -c "sleep 6 && OLLAMA_HOST=http://ollama:11434 ollama pull llama3.2"
+
+volumes:
+  ollama_data:

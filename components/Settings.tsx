@@ -15,8 +15,8 @@ const Settings: React.FC<Props> = ({ onClose }) => {
   const [model, setModel] = useState('');
 
   useEffect(() => {
-    setUrl(ls.get('localAi.url') || 'http://localhost:11435');
-    setExact(ls.get('localAi.exactUrl') || 'http://localhost:11435/api/generate');
+    setUrl(ls.get('localAi.url') || 'http://localhost:11434');
+    setExact(ls.get('localAi.exactUrl') || '');
     setModel(ls.get('localAi.model') || 'llama3');
   }, []);
 
@@ -32,13 +32,14 @@ const Settings: React.FC<Props> = ({ onClose }) => {
   const [testResult, setTestResult] = useState<string | null>(null);
 
   const endpointsToTry = () => {
-    if (exact) return [exact];
-    return [
+    const commonEndpoints = [
       `${url}/api/generate`,
       `${url}/api/completions`,
       `${url}/v1/generate`,
       `${url}/generate`,
     ];
+    if (exact) return [exact, ...commonEndpoints.filter(ep => ep !== exact)];
+    return commonEndpoints;
   };
 
   const handleTest = async () => {

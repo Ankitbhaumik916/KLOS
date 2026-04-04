@@ -1,19 +1,51 @@
 import { ZomatoOrder } from '../types';
+import { GoogleGenAI } from '@google/genai';
 
-/**
- * QA Service - handles custom questions from user about their data using local/cloud AI.
- */
+const geminiApiKey =
+  import.meta.env.VITE_GEMINI_API_KEY ||
+  (typeof process !== 'undefined' ? process.env.API_KEY : undefined) ||
+  (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : undefined) ||
+  '';
 
-async function tryFetchJson(url: string, body: any) {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  const contentType = res.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) return await res.json();
-  return await res.text();
+const ai = geminiApiKey ? new GoogleGenAI({ apiKey: geminiApiKey }) : null;
+const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.5-flash'];
+const GEMINI_RATE_LIMIT_COOLDOWN_MS = 60 * 1000;
+const QA_CACHE_TTL_MS = 2 * 60 * 1000;
+const QA_COOLDOWN_KEY = 'gemini.qa.cooldownUntil';
+
+const qaCache = new Map<string, { at: number; value: string }>();
+const qaInFlight = new Map<string, Promise<string>>();
+let qaGeminiCooldownUntil = 0;
+
+export function getQaGeminiCooldownRemainingMs(): number {
+  const until = Math.max(qaGeminiCooldownUntil, getPersistentCooldownUntil());
+  return Math.max(0, until - Date.now());
+}
+
+function getPersistentCooldownUntil(): number {
+  if (typeof window === 'undefined') return qaGeminiCooldownUntil;
+  const raw = window.localStorage.getItem(QA_COOLDOWN_KEY);
+  const parsed = Number(raw || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function setPersistentCooldownUntil(value: number): void {
+  qaGeminiCooldownUntil = value;
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(QA_COOLDOWN_KEY, String(value));
+  }
+}
+
+function buildQaCacheKey(question: string, orders: ZomatoOrder[], userName: string): string {
+  const total = orders.reduce((sum, o) => sum + (o.totalAmount || 0), 0).toFixed(2);
+  const latest = orders.reduce((max, o) => Math.max(max, Number(o.orderPlacedAt) || 0), 0);
+  return `${userName}|${question.trim().toLowerCase()}|${orders.length}|${total}|${latest}`;
+}
+
+function isRateLimitError(err: any): boolean {
+  const message = String(err?.message || err || '').toLowerCase();
+  const status = Number(err?.status || err?.code || 0);
+  return status === 429 || message.includes('429') || message.includes('too many requests') || message.includes('rate limit');
 }
 
 function buildDataContext(orders: ZomatoOrder[]): string {
@@ -45,10 +77,16 @@ function buildDataContext(orders: ZomatoOrder[]): string {
 }
 
 export async function askAI(question: string, orders: ZomatoOrder[], userName: string): Promise<string> {
+  const cacheKey = buildQaCacheKey(question, orders, userName);
+  const cached = qaCache.get(cacheKey);
+  if (cached && (Date.now() - cached.at) < QA_CACHE_TTL_MS) {
+    return cached.value;
+  }
+
+  const existing = qaInFlight.get(cacheKey);
+  if (existing) return existing;
+
   const dataContext = buildDataContext(orders);
-  const baseUrl = (typeof window !== 'undefined' && localStorage.getItem('localAi.url')) || 'http://localhost:11434';
-  const exactUrl = (typeof window !== 'undefined' && localStorage.getItem('localAi.exactUrl')) || null;
-  const configuredModel = (typeof window !== 'undefined' && localStorage.getItem('localAi.model')) || 'llama3';
 
   const prompt = `You are KitchenOS AI, a strategic analytics assistant for ${userName}'s cloud kitchen.
 
@@ -62,58 +100,45 @@ INSTRUCTIONS:
 - If the question is outside the scope of kitchen analytics, politely redirect to relevant topics.
 - Keep response under 200 words.`;
 
-  const tryEndpoints = exactUrl ? [exactUrl] : [
-    `${baseUrl}/api/generate`,
-    `${baseUrl}/api/completions`,
-    `${baseUrl}/v1/generate`,
-    `${baseUrl}/generate`,
-  ];
+  const run = (async (): Promise<string> => {
+    if (ai) {
+      const cooldownUntil = Math.max(qaGeminiCooldownUntil, getPersistentCooldownUntil());
+      if (Date.now() < cooldownUntil) {
+        const waitSec = Math.ceil((cooldownUntil - Date.now()) / 1000);
+        console.warn(`Gemini Q&A cooldown active. Retrying cloud model in ~${waitSec}s.`);
+      } else {
+        try {
+          for (const model of GEMINI_MODELS) {
+            const response = await ai.models.generateContent({
+              model,
+              contents: prompt,
+            });
 
-  const body = {
-    model: configuredModel,
-    prompt,
-    max_tokens: 256,
-    temperature: 0.2,
-  };
-
-  let lastError: any = null;
-  for (const url of tryEndpoints) {
-    try {
-      const result = await tryFetchJson(url, body);
-      if (!result) continue;
-
-      if (typeof result === 'object') {
-        // Try various response shapes
-        if (result.response && typeof result.response === 'string') {
-          return result.response.trim();
-        }
-        if (result.text && typeof result.text === 'string') {
-          return result.text.trim();
-        }
-        if (result.completion && typeof result.completion === 'string') {
-          return result.completion.trim();
-        }
-        if (result.generations && Array.isArray(result.generations) && result.generations[0]?.text) {
-          return result.generations[0].text.trim();
-        }
-        if (result.choices && Array.isArray(result.choices) && result.choices[0]?.text) {
-          return result.choices[0].text.trim();
+            const text = response.text?.trim();
+            if (text) {
+              qaCache.set(cacheKey, { at: Date.now(), value: text });
+              return text;
+            }
+          }
+        } catch (err) {
+          if (isRateLimitError(err)) {
+            setPersistentCooldownUntil(Date.now() + GEMINI_RATE_LIMIT_COOLDOWN_MS);
+          }
+          console.warn('Gemini Q&A failed, using deterministic fallback:', err);
         }
       }
-
-      if (typeof result === 'string') {
-        return result.trim();
-      }
-    } catch (err) {
-      lastError = err;
     }
-  }
 
-  // If remote/local model calls fail, use a deterministic local fallback
+    const fallback = localAnswerFallback(question, orders);
+    qaCache.set(cacheKey, { at: Date.now(), value: fallback });
+    return fallback;
+  })();
+
+  qaInFlight.set(cacheKey, run);
   try {
-    return localAnswerFallback(question, orders);
-  } catch (e) {
-    throw new Error('AI service unavailable: ' + (lastError?.message || 'unknown'));
+    return await run;
+  } finally {
+    qaInFlight.delete(cacheKey);
   }
 }
 
@@ -174,5 +199,5 @@ function localAnswerFallback(question: string, orders: ZomatoOrder[]): string {
     return `Based on your data: ${topItems[0][0]} is your top seller. Total orders: ${totalOrders}, Revenue: ₹${totalRevenue.toFixed(2)}.`;
   }
   
-  return `Dataset has ${totalOrders} orders with ₹${totalRevenue.toFixed(2)} revenue. For detailed AI insights, ensure your local LLM is running.`;
+  return `Dataset has ${totalOrders} orders with ₹${totalRevenue.toFixed(2)} revenue. For richer responses, ensure Gemini API key is configured.`;
 }

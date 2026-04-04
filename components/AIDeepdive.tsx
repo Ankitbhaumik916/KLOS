@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ZomatoOrder, DSSAnalysis } from '../types';
-import { ragDssService } from '../services/ragDssService';
+import { ragDssService, getDeepDiveGeminiCooldownRemainingMs } from '../services/ragDssService';
 
 interface AIDeepdiveProps {
   orders: ZomatoOrder[];
@@ -13,6 +13,7 @@ const AIDeepdive: React.FC<AIDeepdiveProps> = ({ orders, userName }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [initialized, setInitialized] = useState(false);
+  const [geminiCooldownMs, setGeminiCooldownMs] = useState(0);
 
   // Initialize RAG knowledge base
   useEffect(() => {
@@ -38,6 +39,13 @@ const AIDeepdive: React.FC<AIDeepdiveProps> = ({ orders, userName }) => {
     initialize();
   }, [orders]);
 
+  useEffect(() => {
+    const tick = () => setGeminiCooldownMs(getDeepDiveGeminiCooldownRemainingMs());
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   // Handle query submission
   const handleQuerySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,11 +56,12 @@ const AIDeepdive: React.FC<AIDeepdiveProps> = ({ orders, userName }) => {
     setAnalysis(null);
 
     try {
+      const baseUrl = localStorage.getItem('localAi.url') || 'http://localhost:11434';
       const result = await ragDssService.generateDSSAnalysis(
         query,
         orders,
         userName,
-        'http://localhost:11435'
+        baseUrl
       );
       setAnalysis(result);
     } catch (err) {
@@ -97,6 +106,12 @@ const AIDeepdive: React.FC<AIDeepdiveProps> = ({ orders, userName }) => {
         >
           {loading ? '🔍 Analyzing...' : '⚡ Analyze'}
         </button>
+
+        {geminiCooldownMs > 0 && (
+          <p className="text-xs text-amber-300">
+            Gemini cooldown active: retrying in ~{Math.ceil(geminiCooldownMs / 1000)}s
+          </p>
+        )}
       </form>
 
       {/* Quick Examples */}
