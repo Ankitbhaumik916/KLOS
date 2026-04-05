@@ -288,7 +288,7 @@ const App: React.FC = () => {
                   {(activeTab === 'ai' || activeTab === 'deepdive') && (
                    <Suspense fallback={<div className="text-sm text-gray-400 py-8">Loading AI module...</div>}>
                     {activeTab === 'ai' && <GeminiInsight orders={orders} userName={user.name} userId={user.id} />}
-                    {activeTab === 'deepdive' && <AIDeepdive orders={orders} userName={user.name} />}
+                    {activeTab === 'deepdive' && <AIDeepdive orders={orders} />}
                    </Suspense>
                   )}
               </div>

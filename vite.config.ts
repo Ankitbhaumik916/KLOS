@@ -12,6 +12,9 @@ export default defineConfig(({ mode }) => {
       build: {
         chunkSizeWarningLimit: 1200,
       },
+      optimizeDeps: {
+        exclude: ['@xenova/transformers'],
+      },
       plugins: [react()],
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
