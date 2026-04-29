@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
 import { supabaseService } from '../services/supabaseService';
+import { authService } from '../services/authService';
 import { User } from '../types';
 
 interface LoginProps {
@@ -13,6 +14,12 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+
+  const isSupabaseNetworkError = (err: unknown): boolean => {
+    const message = err instanceof Error ? err.message : String(err || '');
+    const m = message.toLowerCase();
+    return m.includes('failed to fetch') || m.includes('networkerror') || m.includes('network error');
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,7 +44,32 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         setError("Invalid email or access key.");
       }
     } catch (err: any) {
-      setError(err.message || 'Authentication failed.');
+      if (!isSupabaseNetworkError(err)) {
+        setError(err.message || 'Authentication failed.');
+        return;
+      }
+
+      // Fallback mode when Supabase is unreachable.
+      if (isSignup) {
+        const signup = authService.signup({ name: name || email, email, password });
+        if (!signup.success) {
+          setError(signup.message);
+          return;
+        }
+      }
+
+      const localUser = authService.login(email, password);
+      if (!localUser) {
+        setError('Supabase is unreachable and local login failed. Create local account first using Create Protocol.');
+        return;
+      }
+
+      setError('Supabase is unreachable. Logged in with local mode.');
+      onLogin({
+        name: localUser.name || name || email,
+        email: localUser.email || email,
+        id: localUser.id || localUser.email || email,
+      });
     }
   };
 

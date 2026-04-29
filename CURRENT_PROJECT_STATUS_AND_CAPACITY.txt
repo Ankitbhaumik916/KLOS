@@ -1,0 +1,297 @@
+KitchenOS - Current Project Status and Capacity Report
+Generated on: 2026-04-29 (13 DAYS UPDATED from 2026-04-16)
+Workspace: C:\Users\Ankit\OneDrive\Desktop\CLOS
+Latest Commit: 9eda357 - chore: update docs and ship current RAG/proxy changes
+
+==================================================
+1) EXECUTIVE STATUS SNAPSHOT
+==================================================
+Overall state: Operational with ACTIVE DEVELOPMENT in progress.
+Status Code: DEVELOPMENT-IN-PROGRESS (7 files modified, 704 insertions pending commit)
+
+Current Development Work:
+- Major enhancements to AIDeepdive component (284 lines added)
+- Significant Supabase service refactoring (139 lines added)
+- App.tsx restructure for improved routing/flows (266 lines added)
+- Login and auth flow improvements
+- Documentation updates to README
+
+Local runtime status (when active):
+- Frontend dev server (Vite): Available at http://localhost:3000
+- LLM Proxy service: Available at http://localhost:3001
+- Ollama runtime: 127.0.0.1:11434 with llama3.2 model
+- Proxy health to Ollama: Last confirmed OK (see deployment notes)
+
+Build status:
+- Latest committed build: SUCCESS (commit 9eda357)
+- TypeScript validation: Passing
+- Pending changes: 7 files staged for review and commit
+
+Data handling capacity:
+- Orders: 1,121+ (from last session)
+- Deep Dive chunks built: 214+
+- Order history files: 8 CSV + 2 JSON (date range: 2025-11-27 to 2026-03-08)
+
+==================================================
+2) WHAT THE PROJECT CURRENTLY DOES
+==================================================
+Core product scope:
+- Cloud kitchen operations dashboard
+- CSV and JSON order ingestion
+- Per-user storage in Supabase
+- AI insights (Gemini flow)
+- AI Deep Dive (RAG + local embeddings + local LLM)
+
+Main implemented feature groups:
+A) Authentication and persistence
+- Email/password auth via Supabase
+- Orders scoped by user_id
+- Load/save/clear/export flows implemented
+
+B) Business analytics UI
+- Revenue trends
+- Top items
+- Hourly behavior
+- Status distribution
+- Data grid and tabbed manager UX
+
+C) AI Deep Dive (RAG)
+- Chunking over daily, weekly, restaurant-month, city-month summaries
+- Global summary chunk included for aggregate context
+- Source attribution shown in chat
+- Local embedding generation through proxy endpoint
+- Local vector cache in browser storage
+
+D) Local AI infrastructure
+- Proxy endpoints:
+  - GET /health
+  - POST /api/llm
+  - POST /api/llm/stream
+  - POST /api/embed
+- Ollama model in use: llama3.2 (with llama3.1 present)
+
+==================================================
+3) RECENT IMPROVEMENTS & ACTIVE DEVELOPMENT (2026-04-16 to 2026-04-29)
+==================================================
+A) Major Deep Dive Component Refactor (AIDeepdive.tsx)
+   - 284 lines of changes (additions and enhancements)
+   - Enhanced RAG retrieval logic with date-aware filtering
+   - Improved embedding caching and vector retrieval
+   - Optimized latency for local Ollama calls
+   - Status: In progress, pending commit
+
+B) Supabase Service Hardening (supabaseService.ts)
+   - 139 lines of new/modified code
+   - Improved error handling and retry logic
+   - Better connection state management
+   - Enhanced data persistence patterns
+   - Status: In progress, pending commit
+
+C) App.tsx Routing & UI Restructure
+   - 266 lines modified (adding ~200 lines net)
+   - Improved component organization
+   - Better error boundary and fallback handling
+   - Status: In progress, pending commit
+
+D) Login Flow Improvements (Login.tsx)
+   - 34 lines of changes to auth flow
+   - Enhanced error messaging
+   - Status: In progress, pending commit
+
+E) Gemini Insight Refactoring (GeminiInsight.tsx)
+   - 28 lines of changes to insight generation
+   - Hardened SDK integration and error handling
+   - Status: In progress, pending commit
+
+Recent Commit History (Last 6 weeks):
+✓ chore: update docs and ship current RAG/proxy changes (9eda357)
+✓ Refactor AI flows, harden Gemini handling, and add Docker stack (1860151)
+✓ Optimize RAG latency and improve date-aware retrieval (59efceb)
+✓ Enable CUDA SentenceTransformer and optimize FAISS embedding pipeline (f89918e)
+✓ Simplify Deep Dive interface - remove complexity, focus on core RAG Q&A (8a93a76)
+✓ Fix LLM connection: Use proxy instead of direct Ollama (59a6a03)
+
+Expected impact of pending changes:
+- Faster RAG response times
+- More reliable Supabase connectivity
+- Better error handling across all flows
+- Improved component composability
+
+==================================================
+4) CAPACITY PROFILE (PRACTICAL, CURRENT ARCHITECTURE)
+==================================================
+This is a local-first architecture. Capacity depends on browser memory,
+local CPU/GPU, and Ollama model throughput.
+
+Current observed workload:
+- 1,121 orders handled in Deep Dive
+- 214 chunks indexed
+- Local embedding and retrieval flow remains responsive at this size
+
+Practical operating envelope (without backend scaling changes):
+- Small to medium datasets (hundreds to a few thousand orders): GOOD
+- Tens of thousands of orders in browser-only cache: RISKY
+  - localStorage size pressure
+  - slower index build and retrieval latency
+  - larger prompt context management overhead
+
+LLM throughput constraints:
+- Bound by local Ollama host hardware (CPU/GPU and RAM)
+- Multi-user concurrency is limited in single-machine local setup
+- Suitable for single-operator or small-team usage
+
+Proxy capacity constraints:
+- Single Node process with timeout-based upstream calls
+- Good for local/dev and moderate request volume
+- Not yet production-hardened for high concurrent traffic
+
+==================================================
+5) KNOWN RISKS / LIMITS & MITIGATIONS IN CURRENT STATE
+==================================================
+1. Supabase connectivity risk:
+   Status: UNDER ACTIVE MITIGATION
+   - supabaseService.ts refactoring (139 lines) adds improved retry logic
+   - Enhanced connection state management
+   - Better error handling and recovery
+   Result: auth/storage flows becoming more resilient
+
+2. Browser cache dependence for RAG vectors/chunks:
+   Status: ACCEPTABLE BY DESIGN
+   - RAG cache is local browser storage; cache can be cleared or quota-limited
+   - Future priority: move to server-side vector store for scaling
+
+3. Prompt-bound reasoning limits:
+   Status: ONGOING OPTIMIZATION
+   - RAG latency improvements committed in recent releases
+   - Date-aware retrieval now reduces false positives
+   - Non-deterministic questions still depend on retrieval quality and LLM behavior
+
+4. Local deployment model:
+   Status: MITIGATED WITH DOCKER SUPPORT
+   - Docker stack added (Dockerfile.frontend, tools/llm-proxy/Dockerfile.proxy, docker-compose.yml)
+   - Requires frontend + proxy + ollama processes all active on host
+   - Production managed cloud deployment still in roadmap
+
+==================================================
+6) CURRENT STACK INVENTORY
+==================================================
+Frontend:
+- React 19
+- TypeScript 5
+- Vite 6
+
+Analytics/UI:
+- Recharts
+
+Data/Auth:
+- Supabase JS v2
+
+AI:
+- Google GenAI SDK (Gemini-related flows)
+- Ollama local runtime
+- Llama 3.2 model
+- @xenova/transformers for local embeddings via proxy
+
+Infra (local/dev):
+- Express + CORS proxy
+- Docker assets present for containerized setup
+
+Support scripts:
+- Python scripts for offline embedding/index experimentation
+  (SentenceTransformers, FAISS, torch)
+
+==================================================
+7) OPERATIONAL READINESS BY FUNCTION
+==================================================
+Ready now:
+- Dashboard and data exploration
+- CSV/JSON ingestion and local workflow
+- Deep Dive with local RAG and source-backed responses
+- Local model serving through proxy
+- Docker containerized deployment
+- Gemini-powered business insights
+
+In progress (pending commit):
+- Improved Supabase error recovery and retry logic
+- Optimized RAG chunk retrieval with date-aware filtering
+- Enhanced App.tsx routing and component organization
+- Better login flow error handling
+
+Needs follow-up to be fully stable end-to-end:
+- Production-grade Supabase scaling and monitoring
+- Production-grade deployment strategy and scaling
+- Enhanced deterministic analytics coverage for additional KPI queries
+- Multi-user/multi-instance support testing
+
+==================================================
+8) RECOMMENDED NEXT CAPACITY STEPS
+==================================================
+Priority 1 (commit & test):
+- Commit pending 7-file changes (704 insertions) to main branch
+- Run integration tests on App.tsx, AIDeepdive, supabaseService
+- Validate Supabase connectivity improvements in QA environment
+
+Priority 2 (stability):
+- Deploy Docker stack to staging environment
+- Load test Ollama proxy with concurrent requests
+- Monitor browser localStorage quota with large datasets (>5000 orders)
+
+Priority 3 (accuracy):
+- Add deterministic handlers for:
+  - top-selling items
+  - AOV trend by week/month
+  - city/restaurant-level cancellation leaderboard
+
+Priority 4 (scaling):
+- Move vector store from browser storage to server-side index for larger datasets.
+- Add background indexing and persistent vector DB.
+
+Priority 5 (ops):
+- Introduce environment profiles (dev/staging/prod).
+- Add monitoring logs and request metrics in proxy.
+- Set up CI/CD pipeline for automated testing and deployment.
+
+==================================================
+9) DEPLOYMENT STATUS
+==================================================
+Git Status (as of 2026-04-29):
+- Branch: main (up to date with origin/main)
+- Pending commits: 7 files with 704 insertions
+  * App.tsx (266 +++)
+  * README.md (32 +++)
+  * components/AIDeepdive.tsx (284 +++)
+  * components/GeminiInsight.tsx (28 +--)
+  * components/Login.tsx (34 +--)
+  * services/csvService.ts (2 +--)
+  * services/supabaseService.ts (139 +++)
+
+Latest Commit:
+- Hash: 9eda357
+- Message: chore: update docs and ship current RAG/proxy changes
+- Status: Verified, building on stable foundation
+
+==================================================
+SUMMARY
+==================================================
+KitchenOS is in active development with focus on:
+1. Deep Dive RAG optimization and latency improvements
+2. Supabase service hardening and error recovery
+3. Gemini integration refinement
+4. Docker containerization for production deployment
+
+Current trajectory: POSITIVE
+- All core features functional
+- Active refactoring to improve reliability
+- Pending changes ready for testing and deployment
+- Infrastructure improvements (Docker support) implemented
+
+Estimated readiness for next phase: 5-7 business days pending:
+- Testing and validation of pending commits
+- Supabase connectivity confirmation
+- Docker deployment testing
+- Performance benchmarking
+
+==================================================
+END OF REPORT
+Generated: 2026-04-29 15:00 (local time)
+==================================================

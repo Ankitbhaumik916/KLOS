@@ -44,6 +44,192 @@ interface IndexStatus {
   error?: string;
 }
 
+const PROXY_URL_STORAGE_KEY = "localProxy.url";
+const PROXY_URL_ENV = (import.meta.env.VITE_LLM_PROXY_URL as string | undefined)?.trim();
+const RAG_CACHE_VERSION = "v2-status-normalized";
+const RAG_CACHE_META_KEY = "klos_rag_meta";
+
+interface RAGCacheMeta {
+  version: string;
+  orderCount: number;
+  maxOrderPlacedAt: number;
+}
+
+function getProxyBaseCandidates(): string[] {
+  const host = typeof window !== "undefined" ? window.location.hostname : "localhost";
+  const stored = typeof window !== "undefined" ? localStorage.getItem(PROXY_URL_STORAGE_KEY)?.trim() : "";
+
+  const candidates = [
+    PROXY_URL_ENV,
+    stored,
+    `http://${host}:3001`,
+    "http://127.0.0.1:3001",
+    "http://localhost:3001",
+  ].filter((value): value is string => !!value);
+
+  return [...new Set(candidates.map((value) => value.replace(/\/$/, "")))];
+}
+
+async function fetchProxy(path: string, init: RequestInit = {}, timeoutMs = 10000): Promise<Response> {
+  const bases = getProxyBaseCandidates();
+  let lastError: unknown;
+
+  for (const base of bases) {
+    try {
+      const res = await fetch(`${base}${path}`, {
+        ...init,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      return res;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  const reason = lastError instanceof Error ? lastError.message : "unknown network error";
+  throw new Error(
+    `Could not reach local proxy. Tried: ${bases.join(", ")}. Last error: ${reason}`
+  );
+}
+
+function normalizeStatus(status?: string): string {
+  return (status ?? "").trim().toLowerCase();
+}
+
+function isDeliveredStatus(status?: string): boolean {
+  const s = normalizeStatus(status);
+  return s === "delivered" || s === "completed";
+}
+
+function isCancelledLikeStatus(status?: string): boolean {
+  const s = normalizeStatus(status);
+  return s.includes("cancel") || s.includes("reject") || s.includes("fail");
+}
+
+function parseItems(rawItems?: string): Array<{ name: string; qty: number }> {
+  if (!rawItems || !rawItems.trim()) return [];
+  return rawItems
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const match = part.match(/^(\d+)\s*[xX]\s*(.+)$/);
+      if (match) {
+        return {
+          qty: parseInt(match[1], 10) || 1,
+          name: match[2].trim() || "Unknown item",
+        };
+      }
+      return { qty: 1, name: part };
+    });
+}
+
+function computeTopRevenueWeek(orders: Order[]) {
+  const weeks = groupByWeek(orders);
+  const ranked = Object.entries(weeks)
+    .map(([weekStart, weekOrders]) => {
+      const delivered = weekOrders.filter((o) => isDeliveredStatus(o.orderStatus));
+      const cancelled = weekOrders.filter((o) => isCancelledLikeStatus(o.orderStatus));
+      const revenue = delivered.reduce((s, o) => s + o.totalAmount, 0);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      return {
+        weekStart,
+        weekEnd: weekEnd.toISOString().split("T")[0],
+        totalOrders: weekOrders.length,
+        delivered: delivered.length,
+        cancelled: cancelled.length,
+        revenue,
+      };
+    })
+    .sort((a, b) => b.revenue - a.revenue);
+
+  return ranked[0] ?? null;
+}
+
+function computeTopCancellationCity(orders: Order[]) {
+  const byCity: Record<string, { total: number; cancelled: number }> = {};
+  for (const o of orders) {
+    const city = (o.city ?? "Unknown city").trim() || "Unknown city";
+    if (!byCity[city]) byCity[city] = { total: 0, cancelled: 0 };
+    byCity[city].total += 1;
+    if (isCancelledLikeStatus(o.orderStatus)) byCity[city].cancelled += 1;
+  }
+
+  const ranked = Object.entries(byCity)
+    .map(([city, stats]) => ({
+      city,
+      total: stats.total,
+      cancelled: stats.cancelled,
+      cancelRate: stats.total ? (stats.cancelled / stats.total) * 100 : 0,
+    }))
+    .sort((a, b) => b.cancelled - a.cancelled || b.cancelRate - a.cancelRate || b.total - a.total);
+
+  return ranked[0] ?? null;
+}
+
+function buildComputedFactsContext(orders: Order[]): string {
+  const topWeek = computeTopRevenueWeek(orders);
+  const topCity = computeTopCancellationCity(orders);
+
+  const topItemsMap: Record<string, number> = {};
+  for (const o of orders) {
+    for (const item of parseItems(o.items)) {
+      const key = item.name || "Unknown item";
+      topItemsMap[key] = (topItemsMap[key] || 0) + item.qty;
+    }
+  }
+  const topItems = Object.entries(topItemsMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, qty]) => `${name} (${qty})`)
+    .join(", ");
+
+  return [
+    "COMPUTED FACTS (full dataset):",
+    topWeek
+      ? `Highest revenue week: ${topWeek.weekStart} to ${topWeek.weekEnd}, Revenue ₹${topWeek.revenue.toFixed(2)}, Total orders ${topWeek.totalOrders}, Delivered ${topWeek.delivered}, Cancelled/Rejected ${topWeek.cancelled}.`
+      : "Highest revenue week: data not available for this.",
+    topCity
+      ? `Most cancellations city: ${topCity.city}, Cancelled/Rejected ${topCity.cancelled}, Total orders ${topCity.total}, Cancellation rate ${topCity.cancelRate.toFixed(1)}%.`
+      : "Most cancellations city: data not available for this.",
+    `Top items by quantity sold: ${topItems || "data not available for this"}.`,
+  ].join("\n");
+}
+
+function answerDeterministically(query: string, orders: Order[]): string | null {
+  const q = query.toLowerCase();
+
+  if (/which week.*highest revenue|highest revenue.*week|top week.*revenue/.test(q)) {
+    const topWeek = computeTopRevenueWeek(orders);
+    if (!topWeek) return "Data not available for this.";
+    return `Week ${topWeek.weekStart} to ${topWeek.weekEnd} had the highest revenue of ₹${topWeek.revenue.toFixed(2)} (Total orders ${topWeek.totalOrders}, Delivered ${topWeek.delivered}, Cancelled/Rejected ${topWeek.cancelled}).`;
+  }
+
+  if (/which city.*most cancellation|which city.*most cancel|city has the most cancellation|city has the most cancellations|most cancellations.*city/.test(q)) {
+    const topCity = computeTopCancellationCity(orders);
+    if (!topCity) return "Data not available for this.";
+    if (topCity.cancelled === 0) {
+      return "No cancelled or rejected orders were found in the dataset, so no city has cancellations.";
+    }
+    return `City ${topCity.city} has the most cancellations with ${topCity.cancelled} cancelled/rejected orders out of ${topCity.total} total orders (${topCity.cancelRate.toFixed(1)}%).`;
+  }
+
+  return null;
+}
+
+function buildOrdersCacheMeta(orders: Order[]): RAGCacheMeta {
+  const maxOrderPlacedAt = orders.reduce(
+    (max, order) => Math.max(max, Number(order.orderPlacedAt) || 0),
+    0
+  );
+  return {
+    version: RAG_CACHE_VERSION,
+    orderCount: orders.length,
+    maxOrderPlacedAt,
+  };
+}
+
 // ── Chunk Builder ────────────────────────────────────────────────────────────
 
 function groupByWeek(orders: Order[]): Record<string, Order[]> {
@@ -60,19 +246,17 @@ function groupByWeek(orders: Order[]): Record<string, Order[]> {
 }
 
 function buildGlobalSummaryChunk(orders: Order[]): OrderChunk {
-  const delivered = orders.filter((o) => o.orderStatus === "Delivered");
-  const cancelled = orders.filter((o) => o.orderStatus === "Cancelled");
+  const delivered = orders.filter((o) => isDeliveredStatus(o.orderStatus));
+  const cancelled = orders.filter((o) => isCancelledLikeStatus(o.orderStatus));
   const totalRevenue = delivered.reduce((s, o) => s + o.totalAmount, 0);
   const avgOrder = delivered.length ? totalRevenue / delivered.length : 0;
   const cancelRate = orders.length ? (cancelled.length / orders.length) * 100 : 0;
 
   const itemCounts: Record<string, number> = {};
   for (const o of orders) {
-    const rawItems = o.items ?? "";
-    const match = rawItems.match(/^(\d+) x (.+)$/);
-    const qty = match ? parseInt(match[1], 10) : 1;
-    const name = match ? match[2].trim() : rawItems.trim();
-    itemCounts[name] = (itemCounts[name] || 0) + qty;
+    for (const item of parseItems(o.items)) {
+      itemCounts[item.name] = (itemCounts[item.name] || 0) + item.qty;
+    }
   }
   const topItems = Object.entries(itemCounts)
     .sort((a, b) => b[1] - a[1])
@@ -120,7 +304,7 @@ function buildGlobalSummaryChunk(orders: Order[]): OrderChunk {
     id: "global-summary",
     text: [
       `GLOBAL SUMMARY across all data (${firstDate} to ${lastDate}):`,
-      `Total orders: ${orders.length}, Delivered: ${delivered.length}, Cancelled: ${cancelled.length}.`,
+      `Total orders: ${orders.length}, Delivered: ${delivered.length}, Cancelled/Rejected: ${cancelled.length}.`,
       `Total revenue: ₹${totalRevenue.toFixed(2)}, Average order value: ₹${avgOrder.toFixed(2)}.`,
       `Overall cancellation rate: ${cancelRate.toFixed(1)}%.`,
       `Top items by quantity sold (all-time): ${topItems}.`,
@@ -149,8 +333,8 @@ function buildChunks(orders: Order[]): OrderChunk[] {
   }
 
   for (const [day, dayOrders] of Object.entries(dailyGroups)) {
-    const delivered = dayOrders.filter((o) => o.orderStatus === "Delivered");
-    const cancelled = dayOrders.filter((o) => o.orderStatus === "Cancelled");
+    const delivered = dayOrders.filter((o) => isDeliveredStatus(o.orderStatus));
+    const cancelled = dayOrders.filter((o) => isCancelledLikeStatus(o.orderStatus));
     const revenue = delivered.reduce((s, o) => s + o.totalAmount, 0);
 
     const itemCounts: Record<string, number> = {};
@@ -188,7 +372,7 @@ function buildChunks(orders: Order[]): OrderChunk[] {
 
     chunks.push({
       id: `day-${day}`,
-      text: `Day ${day}: Total orders ${dayOrders.length}, Delivered ${delivered.length}, Cancelled ${cancelled.length}, Revenue ₹${revenue.toFixed(2)}, Top items: ${topItems}, Top cities: ${topCities}, Top restaurants: ${topRestaurants}.`,
+      text: `Day ${day}: Total orders ${dayOrders.length}, Delivered ${delivered.length}, Cancelled/Rejected ${cancelled.length}, Revenue ₹${revenue.toFixed(2)}, Top items: ${topItems}, Top cities: ${topCities}, Top restaurants: ${topRestaurants}.`,
       metadata: {
         startDate: day,
         endDate: day,
@@ -201,8 +385,8 @@ function buildChunks(orders: Order[]): OrderChunk[] {
   // ── Weekly chunks ──
   const weeks = groupByWeek(orders);
   for (const [weekStart, weekOrders] of Object.entries(weeks)) {
-    const delivered = weekOrders.filter((o) => o.orderStatus === "Delivered");
-    const cancelled = weekOrders.filter((o) => o.orderStatus === "Cancelled");
+    const delivered = weekOrders.filter((o) => isDeliveredStatus(o.orderStatus));
+    const cancelled = weekOrders.filter((o) => isCancelledLikeStatus(o.orderStatus));
     const revenue = delivered.reduce((s, o) => s + o.totalAmount, 0);
 
     const itemCounts: Record<string, number> = {};
@@ -240,7 +424,7 @@ function buildChunks(orders: Order[]): OrderChunk[] {
 
     chunks.push({
       id: `week-${weekStart}`,
-      text: `Week ${weekStart} to ${endStr}: Total orders ${weekOrders.length}, Delivered ${delivered.length}, Cancelled ${cancelled.length}, Revenue ₹${revenue.toFixed(2)}, Avg order value ₹${avgOrderValue}, Cancellation rate ${cancelRate}%, Top items: ${topItems}, Top cities: ${topCities}.`,
+      text: `Week ${weekStart} to ${endStr}: Total orders ${weekOrders.length}, Delivered ${delivered.length}, Cancelled/Rejected ${cancelled.length}, Revenue ₹${revenue.toFixed(2)}, Avg order value ₹${avgOrderValue}, Cancellation rate ${cancelRate}%, Top items: ${topItems}, Top cities: ${topCities}.`,
       metadata: {
         startDate: weekStart,
         endDate: endStr,
@@ -262,7 +446,7 @@ function buildChunks(orders: Order[]): OrderChunk[] {
 
   for (const [key, rOrders] of Object.entries(restaurantMonthMap)) {
     const [restaurant, month] = key.split("::");
-    const delivered = rOrders.filter((o) => o.orderStatus === "Delivered");
+    const delivered = rOrders.filter((o) => isDeliveredStatus(o.orderStatus));
     const revenue = delivered.reduce((s, o) => s + o.totalAmount, 0);
 
     const itemCounts: Record<string, number> = {};
@@ -301,16 +485,16 @@ function buildChunks(orders: Order[]): OrderChunk[] {
 
   for (const [key, cOrders] of Object.entries(cityMonthMap)) {
     const [city, month] = key.split("::");
-    const delivered = cOrders.filter((o) => o.orderStatus === "Delivered");
+    const delivered = cOrders.filter((o) => isDeliveredStatus(o.orderStatus));
     const revenue = delivered.reduce((s, o) => s + o.totalAmount, 0);
-    const cancelled = cOrders.filter((o) => o.orderStatus === "Cancelled");
+    const cancelled = cOrders.filter((o) => isCancelledLikeStatus(o.orderStatus));
     const cancelRate = cOrders.length
       ? ((cancelled.length / cOrders.length) * 100).toFixed(1)
       : "0";
 
     chunks.push({
       id: `city-${city}-${month}`,
-      text: `City ${city} in ${month}: Total orders ${cOrders.length}, Delivered ${delivered.length}, Revenue ₹${revenue.toFixed(2)}, Cancellation rate ${cancelRate}%.`,
+      text: `City ${city} in ${month}: Total orders ${cOrders.length}, Delivered ${delivered.length}, Cancelled/Rejected ${cancelled.length}, Revenue ₹${revenue.toFixed(2)}, Cancellation rate ${cancelRate}%.`,
       metadata: {
         startDate: `${month}-01`,
         endDate: `${month}-28`,
@@ -357,9 +541,7 @@ class RAGEngine {
     onProgress: (msg: string) => void
   ): Promise<void> {
     onProgress("Connecting to local embedding service…");
-    const res = await fetch("http://localhost:3001/health", {
-      signal: AbortSignal.timeout(3000),
-    });
+    const res = await fetchProxy("/health", {}, 3000);
     if (!res.ok) {
       throw new Error(`Embedding service unavailable (${res.status})`);
     }
@@ -385,11 +567,11 @@ class RAGEngine {
         pct
       );
 
-      const res = await fetch("http://localhost:3001/api/embed", {
+      const res = await fetchProxy("/api/embed", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ texts: batch.map((chunk) => chunk.text) }),
-      });
+      }, 30000);
 
       if (!res.ok) {
         const errText = await res.text();
@@ -428,6 +610,8 @@ class RAGEngine {
         )
       );
       localStorage.setItem("klos_rag_chunks", JSON.stringify(this.chunks));
+      localStorage.setItem("klos_rag_cache_version", RAG_CACHE_VERSION);
+      localStorage.setItem(RAG_CACHE_META_KEY, JSON.stringify(buildOrdersCacheMeta(orders)));
     } catch (_) {
       // localStorage quota — silently skip
     }
@@ -436,8 +620,23 @@ class RAGEngine {
     return this.chunks.length;
   }
 
-  async loadFromCache(): Promise<boolean> {
+  async loadFromCache(currentOrders: Order[]): Promise<boolean> {
     try {
+      const cacheVersion = localStorage.getItem("klos_rag_cache_version");
+      if (cacheVersion !== RAG_CACHE_VERSION) return false;
+
+      const rawMeta = localStorage.getItem(RAG_CACHE_META_KEY);
+      if (!rawMeta) return false;
+      const cacheMeta = JSON.parse(rawMeta) as RAGCacheMeta;
+      const currentMeta = buildOrdersCacheMeta(currentOrders);
+      if (
+        cacheMeta.version !== currentMeta.version ||
+        cacheMeta.orderCount !== currentMeta.orderCount ||
+        cacheMeta.maxOrderPlacedAt !== currentMeta.maxOrderPlacedAt
+      ) {
+        return false;
+      }
+
       const rawVecs = localStorage.getItem("klos_rag_vectors");
       const rawChunks = localStorage.getItem("klos_rag_chunks");
       if (!rawVecs || !rawChunks) return false;
@@ -458,11 +657,11 @@ class RAGEngine {
   async retrieve(query: string, topK = 8): Promise<OrderChunk[]> {
     if (!this.ready) return [];
 
-    const res = await fetch("http://localhost:3001/api/embed", {
+    const res = await fetchProxy("/api/embed", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ texts: [query] }),
-    });
+    }, 20000);
 
     if (!res.ok) {
       const errText = await res.text();
@@ -519,9 +718,7 @@ export default function AIDeepdive({ orders: ordersProp }: AIDeepdiveProps) {
 
   const pingLlmHealth = useCallback(async () => {
     try {
-      const res = await fetch("http://localhost:3001/health", {
-        signal: AbortSignal.timeout(3000),
-      });
+      const res = await fetchProxy("/health", {}, 3000);
       if (!res.ok) {
         setLlmOnline(false);
         return;
@@ -581,7 +778,8 @@ export default function AIDeepdive({ orders: ordersProp }: AIDeepdiveProps) {
   // ── Try loading from cache on mount ──
   useEffect(() => {
     (async () => {
-      const cached = await engine.loadFromCache();
+      if (!orders || orders.length === 0) return;
+      const cached = await engine.loadFromCache(orders);
       if (cached) {
         setIndexStatus({
           state: "ready",
@@ -594,9 +792,11 @@ export default function AIDeepdive({ orders: ordersProp }: AIDeepdiveProps) {
             timestamp: Date.now(),
           },
         ]);
+      } else {
+        setIndexStatus({ state: "idle" });
       }
     })();
-  }, [engine]);
+  }, [engine, orders]);
 
   // ── Send query ──
   const send = useCallback(
@@ -615,15 +815,33 @@ export default function AIDeepdive({ orders: ordersProp }: AIDeepdiveProps) {
 
       try {
         const sources = await engine.retrieve(query, 6);
+        const deterministic = answerDeterministically(query, orders);
+        if (deterministic) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content: deterministic,
+              sources,
+              timestamp: Date.now(),
+            },
+          ]);
+          return;
+        }
+
         setThinkingLabel("Generating analysis…");
 
         const context = sources.map((c) => c.text).join("\n\n");
+        const computedFacts = buildComputedFactsContext(orders);
         const prompt = `You are KLOS, a precise data analyst for a cloud kitchen.
       STRICT RULES:
       - Only use numbers that appear verbatim in the context below. Never calculate or estimate.
       - If a specific number isn't in the context, say "data not available for this".
       - Quote the exact week/month range when citing a figure.
       - Keep response under 200 words unless the question requires more detail.
+
+PRECOMPUTED FACTS:
+${computedFacts}
 
 DATA CONTEXT:
 ${context}
@@ -632,11 +850,11 @@ QUESTION: ${query}
 
 ANALYSIS:`;
 
-        const res = await fetch("http://localhost:3001/api/llm", {
+        const res = await fetchProxy("/api/llm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt, model: "llama3.2" }),
-        });
+        }, 120000);
 
         if (!res.ok) {
           const errText = await res.text();

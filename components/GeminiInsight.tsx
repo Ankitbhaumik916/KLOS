@@ -112,9 +112,23 @@ const GeminiInsight: React.FC<GeminiInsightProps> = ({ orders, userName, userId 
     }
   };
 
-  const profitData = insight ? [
-    { name: 'Net Revenue', value: insight.profitabilityAnalysis.estimatedNet, color: '#10b981' },
-    { name: 'Zomato Cut (35%)', value: insight.profitabilityAnalysis.zomatoCommission, color: '#f97316' },
+  const normalizeMoney = (value: unknown): number => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+  };
+
+  const profitability = insight
+    ? {
+        grossRevenue: normalizeMoney(insight.profitabilityAnalysis?.grossRevenue),
+        zomatoCommission: normalizeMoney(insight.profitabilityAnalysis?.zomatoCommission),
+        estimatedNet: normalizeMoney(insight.profitabilityAnalysis?.estimatedNet),
+        analysis: insight.profitabilityAnalysis?.analysis || 'No profitability analysis available.',
+      }
+    : null;
+
+  const profitData = profitability ? [
+    { name: 'Net Revenue', value: profitability.estimatedNet, color: '#10b981' },
+    { name: 'Zomato Cut (35%)', value: profitability.zomatoCommission, color: '#f97316' },
   ] : [];
 
   return (
@@ -192,21 +206,21 @@ const GeminiInsight: React.FC<GeminiInsightProps> = ({ orders, userName, userId 
                       </ResponsiveContainer>
                       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center">
                           <p className="text-xs text-gray-500">Gross</p>
-                          <p className="text-sm font-bold text-white">₹{insight.profitabilityAnalysis.grossRevenue.toLocaleString()}</p>
+                          <p className="text-sm font-bold text-white">₹{profitability?.grossRevenue.toLocaleString()}</p>
                       </div>
                   </div>
                   <div className="space-y-3 mt-4">
                       <div className="flex justify-between text-sm">
                           <span className="text-gray-400">Zomato Cut (35%)</span>
-                          <span className="text-orange-400 font-mono">-₹{insight.profitabilityAnalysis.zomatoCommission.toLocaleString()}</span>
+                          <span className="text-orange-400 font-mono">-₹{profitability?.zomatoCommission.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between text-sm pt-2 border-t border-white/10">
                           <span className="text-emerald-400 font-medium">Est. Net Revenue</span>
-                          <span className="text-emerald-400 font-bold font-mono">₹{insight.profitabilityAnalysis.estimatedNet.toLocaleString()}</span>
+                          <span className="text-emerald-400 font-bold font-mono">₹{profitability?.estimatedNet.toLocaleString()}</span>
                       </div>
                   </div>
                   <p className="mt-4 text-xs text-gray-400 leading-relaxed border-t border-white/5 pt-3">
-                      {insight.profitabilityAnalysis.analysis}
+                        {profitability?.analysis}
                   </p>
               </div>
 

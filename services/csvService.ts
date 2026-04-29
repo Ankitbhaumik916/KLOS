@@ -118,7 +118,7 @@ export const parseCSV = async (file: File): Promise<ZomatoOrder[]> => {
       }
     };
 
-    reader.onerror = (err) => reject(err);
+    reader.onerror = () => reject(new Error('Unable to read CSV file. The file may be locked, corrupted, or unsupported.'));
     reader.readAsText(file);
   });
 };

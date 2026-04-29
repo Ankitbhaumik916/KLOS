@@ -43,6 +43,38 @@ KitchenOS is a React + TypeScript + Vite app for cloud-kitchen analytics with:
 - Ollama (local model runtime)
 - `@xenova/transformers` (proxy-side local embeddings)
 
+## Stack Status
+
+| Area | Status | Where it is used | Notes |
+|---|---|---|---|
+| React / TypeScript / Vite | Used | Frontend app | Main UI stack |
+| Supabase | Used | Auth and order storage | Per-user data persistence |
+| Recharts | Used | Dashboard charts | Visual metrics and trends |
+| Google GenAI SDK | Used | AI Insights | Gemini-powered Q&A flow |
+| Express + CORS | Used | Local proxy | Routes requests to LLM and embeddings |
+| Ollama | Used | Local model runtime | Hosts llama3.2 for Deep Dive |
+| `@xenova/transformers` | Used | Proxy-side embeddings | Local sentence embeddings |
+| Python + Torch + SentenceTransformers + FAISS | Used in supporting scripts | `embed_store.py`, `query_rag.py` | Offline embedding/indexing scripts |
+| Docker | Used | `docker-compose.yml`, `Dockerfile.frontend`, `tools/llm-proxy/Dockerfile.proxy` | Local multi-service development setup |
+| RAPIDS | Not currently used | Demo-only reference in `kk.jsx` | No production dependency yet |
+
+## RAPIDS Feasibility
+
+Yes, RAPIDS can be added, but it would be a backend/data-pipeline change, not a frontend one. RAPIDS is most useful if you want GPU-accelerated CSV processing, dataframe operations, clustering, or other analytics on NVIDIA hardware.
+
+Best fit for this project:
+
+- Move heavy preprocessing into Python services or scripts
+- Use cuDF for large order-table operations
+- Use cuML for GPU-accelerated clustering or classification
+- Keep the React app and Node proxy as the UI/orchestration layer
+
+Constraints:
+
+- Requires an NVIDIA GPU and matching CUDA stack
+- Adds environment complexity on Windows and in Docker
+- Only worth it if your datasets are large enough for CPU bottlenecks to matter
+
 ## Setup
 
 ### Prerequisites

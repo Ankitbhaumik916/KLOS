@@ -7,18 +7,110 @@ import Login from './components/Login';
 import Settings from './components/Settings';
 import { parseCSV } from './services/csvService';
 import { supabaseService } from './services/supabaseService';
+import { authService } from './services/authService';
 
 const GeminiInsight = lazy(() => import('./components/GeminiInsight'));
 const AIDeepdive = lazy(() => import('./components/AIDeepdive'));
 
 type Tab = 'dashboard' | 'data' | 'ai' | 'deepdive';
 
+const getOrdersCacheKey = (userEmail: string) => `clos_orders_cache_${userEmail.toLowerCase()}`;
+
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [orders, setOrders] = useState<ZomatoOrder[]>([]);
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [isUploading, setIsUploading] = useState(false);
+  const [isConverting, setIsConverting] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+
+  const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    return 'Unknown error';
+  };
+
+  const normalizeOrderId = (value: unknown): string => String(value ?? '').trim();
+
+  const normalizeOrderDate = (value: unknown): number => {
+    if (typeof value === 'number') {
+      return value > 0 && value < 9999999999 ? value * 1000 : value;
+    }
+
+    if (typeof value === 'string') {
+      const numeric = Number(value);
+      if (!Number.isNaN(numeric)) {
+        return numeric > 0 && numeric < 9999999999 ? numeric * 1000 : numeric;
+      }
+
+      const parsed = Date.parse(value);
+      if (!Number.isNaN(parsed)) {
+        return parsed;
+      }
+    }
+
+    return Date.now();
+  };
+
+  const normalizeImportedOrders = (value: unknown): ZomatoOrder[] => {
+    if (!Array.isArray(value)) {
+      throw new Error('JSON must be an array of orders.');
+    }
+
+    return value.map((item, index) => {
+      if (!item || typeof item !== 'object') {
+        throw new Error(`Order at index ${index} is not a valid object.`);
+      }
+
+      const order = item as Partial<ZomatoOrder> & { orderPlacedAt?: unknown };
+      if (!order.orderId || !order.restaurantName) {
+        throw new Error(`Order at index ${index} is missing required fields like orderId or restaurantName.`);
+      }
+
+      return {
+        orderId: normalizeOrderId(order.orderId),
+        restaurantName: String(order.restaurantName),
+        orderPlacedAt: normalizeOrderDate(order.orderPlacedAt),
+        orderStatus: String(order.orderStatus || 'Unknown'),
+        totalAmount: Number(order.totalAmount || 0),
+        rating: typeof order.rating === 'number' ? order.rating : undefined,
+        items: order.items ? String(order.items) : '',
+        city: order.city ? String(order.city) : '',
+      };
+    });
+  };
+
+  const mergeOrdersById = (existingOrders: ZomatoOrder[], incomingOrders: ZomatoOrder[]): ZomatoOrder[] => {
+    const merged = new Map<string, ZomatoOrder>();
+
+    existingOrders.forEach((order) => {
+      merged.set(normalizeOrderId(order.orderId), {
+        ...order,
+        orderId: normalizeOrderId(order.orderId),
+      });
+    });
+
+    incomingOrders.forEach((order) => {
+      merged.set(normalizeOrderId(order.orderId), {
+        ...order,
+        orderId: normalizeOrderId(order.orderId),
+      });
+    });
+
+    return Array.from(merged.values()).sort((a, b) => b.orderPlacedAt - a.orderPlacedAt);
+  };
+
+  const readCachedOrders = (userEmail: string): ZomatoOrder[] => {
+    try {
+      const raw = localStorage.getItem(getOrdersCacheKey(userEmail));
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return normalizeImportedOrders(parsed);
+    } catch (err) {
+      console.warn('Failed to read cached orders, ignoring cache:', err);
+      return [];
+    }
+  };
 
   // Load User Session & Orders on Mount
   useEffect(() => {
@@ -31,9 +123,19 @@ const App: React.FC = () => {
         if (session && session.user) {
           const email = session.user.email ?? `${session.user.id}@unknown.local`;
           setUser({ name: email, email, id: session.user.id });
+          return;
         }
       } catch (err) {
         console.error('Session restore failed', err);
+      }
+
+      const localSession = authService.getSession();
+      if (localSession) {
+        setUser({
+          name: localSession.name,
+          email: localSession.email,
+          id: localSession.id || localSession.email,
+        });
       }
     })();
   }, []);
@@ -41,41 +143,124 @@ const App: React.FC = () => {
   // Load orders whenever the active user changes (initial session restore or manual login)
   useEffect(() => {
     (async () => {
-      if (!user?.id) {
+      if (!user?.id || !user?.email) {
         setOrders([]);
         return;
       }
 
+      const cachedOrders = readCachedOrders(user.email);
+      if (cachedOrders.length > 0) {
+        setOrders(cachedOrders);
+      }
+
       try {
         const loadedOrders = await supabaseService.loadOrders(user.id);
-        setOrders(loadedOrders);
+        const mergedOrders = mergeOrdersById(cachedOrders, loadedOrders);
+        setOrders(mergedOrders);
       } catch (err) {
         console.error('Failed to load orders for user', user.id, err);
       }
     })();
   }, [user?.id]);
 
+  useEffect(() => {
+    if (!user?.email) return;
+    try {
+      localStorage.setItem(getOrdersCacheKey(user.email), JSON.stringify(orders));
+    } catch (err) {
+      console.warn('Failed to cache orders locally:', err);
+    }
+  }, [orders, user?.email]);
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file && user?.id) {
       setIsUploading(true);
       try {
-        const parsedOrders = await parseCSV(file);
-        // Convert orderPlacedAt from ms to s if needed
-        parsedOrders.forEach(order => {
-          if (order.orderPlacedAt && order.orderPlacedAt > 9999999999) {
-            order.orderPlacedAt = Math.floor(order.orderPlacedAt / 1000);
-          }
-        });
+        const parsedOrders = (await parseCSV(file)).map((order) => ({
+          ...order,
+          orderId: normalizeOrderId(order.orderId),
+        }));
+        if (parsedOrders.length === 0) {
+          throw new Error('No valid rows were found in the CSV file. Check the header names and row format.');
+        }
+
+        const existingIds = new Set(orders.map((o) => normalizeOrderId(o.orderId)));
+        const uploadedUniqueIds = new Set(parsedOrders.map((o) => normalizeOrderId(o.orderId)));
+        const expectedNew = Array.from(uploadedUniqueIds).filter((id) => !existingIds.has(id)).length;
+        const expectedExisting = uploadedUniqueIds.size - expectedNew;
+
         await supabaseService.saveOrders(user.id, parsedOrders);
+        const verifiedCount = await supabaseService.countExistingOrderIds(
+          user.id,
+          Array.from(uploadedUniqueIds)
+        );
         const loadedOrders = await supabaseService.loadOrders(user.id);
-        setOrders(loadedOrders);
+        if (loadedOrders.length === 0) {
+          throw new Error('Orders were saved, but no rows were returned from Supabase. Check your table name, row-level security, and user_id column.');
+        }
+
+        const missingAfterSync = uploadedUniqueIds.size - verifiedCount;
+        if (missingAfterSync > 0) {
+          throw new Error(
+            `Cloud sync incomplete. ${missingAfterSync} uploaded order IDs were not found in Supabase after save (verified ${verifiedCount}/${uploadedUniqueIds.size}).`
+          );
+        }
+
+        setOrders(mergeOrdersById(orders, loadedOrders));
+        alert(
+          `Upload successful. Processed ${parsedOrders.length} rows (${uploadedUniqueIds.size} unique IDs): ${expectedNew} new, ${expectedExisting} existing updated.`
+        );
       } catch (err) {
-        console.error("CSV Parse Error", err);
-        alert("Failed to parse CSV file or save to cloud.");
+        console.error('CSV upload failed', err);
+        alert(`Upload failed: ${getErrorMessage(err)}`);
       } finally {
         setIsUploading(false);
       }
+    }
+  };
+
+  const exportOrdersAsJson = (parsedOrders: ZomatoOrder[], originalName: string) => {
+    const jsonOrders = parsedOrders.map((order) => ({
+      orderId: order.orderId,
+      restaurantName: order.restaurantName,
+      orderPlacedAt: order.orderPlacedAt,
+      orderStatus: order.orderStatus,
+      totalAmount: order.totalAmount,
+      items: order.items || '',
+      city: order.city || '',
+    }));
+
+    const blob = new Blob([JSON.stringify(jsonOrders, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${originalName.replace(/\.csv$/i, '') || 'orders'}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleConvertCsvToJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsConverting(true);
+    try {
+      const parsedOrders = await parseCSV(file);
+      if (parsedOrders.length === 0) {
+        throw new Error('No valid rows were found in the CSV file. Check the header names and row format.');
+      }
+
+      exportOrdersAsJson(parsedOrders, file.name);
+      alert(`Converted ${parsedOrders.length} orders to JSON.`);
+    } catch (err) {
+      console.error('CSV to JSON conversion failed', err);
+      alert(`Conversion failed: ${getErrorMessage(err)}`);
+    } finally {
+      setIsConverting(false);
+      (e.target as HTMLInputElement).value = '';
     }
   };
 
@@ -116,18 +301,42 @@ const App: React.FC = () => {
     if (!file || !user?.id) return;
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text);
-      if (!Array.isArray(parsed)) {
-        throw new Error('JSON must be an array of orders.');
-      }
+      const parsedOrders = normalizeImportedOrders(JSON.parse(text)).map((order) => ({
+        ...order,
+        orderId: normalizeOrderId(order.orderId),
+      }));
+      const existingIds = new Set(orders.map((o) => normalizeOrderId(o.orderId)));
+      const uploadedUniqueIds = new Set(parsedOrders.map((o) => normalizeOrderId(o.orderId)));
+      const expectedNew = Array.from(uploadedUniqueIds).filter((id) => !existingIds.has(id)).length;
+      const expectedExisting = uploadedUniqueIds.size - expectedNew;
 
-      await supabaseService.saveOrders(user.id, parsed as ZomatoOrder[]);
-      const loadedOrders = await supabaseService.loadOrders(user.id);
-      setOrders(loadedOrders);
-      alert('Import successful.');
+      try {
+        await supabaseService.saveOrders(user.id, parsedOrders);
+        const verifiedCount = await supabaseService.countExistingOrderIds(
+          user.id,
+          Array.from(uploadedUniqueIds)
+        );
+        const loadedOrders = await supabaseService.loadOrders(user.id);
+
+        const missingAfterSync = uploadedUniqueIds.size - verifiedCount;
+        if (missingAfterSync > 0) {
+          throw new Error(
+            `Cloud sync incomplete. ${missingAfterSync} uploaded order IDs were not found in Supabase after save (verified ${verifiedCount}/${uploadedUniqueIds.size}).`
+          );
+        }
+
+        setOrders((currentOrders) => mergeOrdersById(currentOrders, loadedOrders));
+        alert(
+          `Import successful. Processed ${parsedOrders.length} rows (${uploadedUniqueIds.size} unique IDs): ${expectedNew} new, ${expectedExisting} existing updated.`
+        );
+      } catch (saveErr) {
+        console.warn('JSON import failed to save to Supabase:', saveErr);
+        alert(`Import failed: ${getErrorMessage(saveErr)}`);
+        return;
+      }
     } catch (err) {
       console.error('Import failed', err);
-      alert('Failed to import JSON data. Ensure it matches expected format.');
+      alert(`Failed to import JSON data: ${getErrorMessage(err)}`);
     } finally {
       (e.target as HTMLInputElement).value = '';
     }
@@ -139,6 +348,7 @@ const App: React.FC = () => {
     } catch (err) {
       console.error('Sign out failed', err);
     } finally {
+      authService.logout();
       setOrders([]);
       setUser(null);
     }
@@ -190,6 +400,20 @@ const App: React.FC = () => {
                   </>
                 )}
                 <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
+             </label>
+
+             <label className={`cursor-pointer px-4 py-2 rounded-lg font-bold text-[10px] uppercase tracking-widest transition-all border flex items-center gap-2 ${
+                  isConverting
+                  ? 'bg-gray-800 text-gray-400 border-gray-700'
+                  : 'bg-white/5 border-white/10 text-blue-400 hover:bg-blue-500 hover:text-white hover:border-blue-500'
+                }`}>
+                {isConverting ? <span>Converting...</span> : (
+                  <>
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V8m0 8h8m-8 0 8-8m4 0v8m0-8h-8m8 0-8 8" /></svg>
+                    <span>CSV → JSON</span>
+                  </>
+                )}
+                <input type="file" accept=".csv" className="hidden" onChange={handleConvertCsvToJson} />
              </label>
 
              {/* Hidden input for importing a previous export (JSON) */}
